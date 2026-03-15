@@ -1,0 +1,56 @@
+; ═══════════════════════════════════════════
+; Credit Card Fraud Detection — Train & Classify
+; ═══════════════════════════════════════════
+; Real-world ML: detect fraudulent transactions in real time
+;
+; Features (6 inputs, normalized 0–1):
+;   1. amount         — transaction size relative to card limit
+;   2. time_delta     — hours since cardholder's last transaction
+;   3. distance       — km from cardholder's usual location
+;   4. hourly_freq    — number of transactions in the past hour
+;   5. is_foreign     — 1 if cross-border, 0 domestic
+;   6. merchant_risk  — merchant category risk score
+;
+; Output: fraud probability (sigmoid → 0=legit, 1=fraud)
+;
+; Architecture: 6 → 8 → 1 (ReLU hidden, Sigmoid output)
+; Training: TNET on 10 labeled transactions (1000 epochs)
+; Decision threshold: 0.5
+; ═══════════════════════════════════════════
+
+; Load initial weights
+LD    R1 @w1                  ; 6×8 hidden weights
+LD    R2 @b1                  ; 1×8 hidden bias
+LD    R3 @w2                  ; 8×1 output weights
+LD    R4 @b2                  ; 1×1 output bias
+
+; Train on labeled transaction history
+LD    R0 @training_data       ; 10×6 feature matrix
+LD    R9 @training_labels     ; 10×1 fraud labels (0/1)
+TNET  #1000  #0.01  #0
+ST    R8 @training_loss
+
+; Classify incoming transaction
+LD    R0 @new_transaction     ; 1×6
+
+; Hidden layer: 6 → 8
+MMUL  R5 R0 R1
+MADD  R5 R5 R2
+RELU  R5 R5
+
+; Output layer: 8 → 1
+MMUL  R6 R5 R3
+MADD  R6 R6 R4
+SIGM  RA R6
+
+ST    RA @fraud_score
+
+; Threshold decision: flag >= 0.5 as fraud
+; CMPI sets flag = (RA < 0.5), JMPF jumps when flag is false (RA >= 0.5)
+CMPI  RE RA #0.5
+JMPF  #2
+LEAF  RB #0.0
+JUMP  #1
+LEAF  RB #1.0
+ST    RB @decision
+HALT

@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NML Collective Dashboard</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace; background: #0a0e17; color: #c9d1d9; min-height: 100vh; }
+.header { background: #161b22; border-bottom: 1px solid #30363d; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+.header h1 { font-size: 18px; color: #58a6ff; font-weight: 600; }
+.header .status { font-size: 13px; color: #8b949e; }
+.header .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #3fb950; margin-right: 6px; animation: pulse 2s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.container { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto 1fr; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
+.panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+.panel h2 { font-size: 14px; color: #58a6ff; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+.mesh-panel { grid-column: 1 / -1; min-height: 240px; position: relative; }
+.mesh-canvas { width: 100%; height: 220px; }
+.agents-panel { min-height: 300px; }
+.feed-panel { min-height: 300px; }
+.agent-card { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-bottom: 8px; transition: border-color 0.3s; }
+.agent-card.active { border-color: #3fb950; }
+.agent-card .name { font-size: 14px; font-weight: 600; color: #f0f6fc; }
+.agent-card .meta { font-size: 12px; color: #8b949e; margin-top: 4px; }
+.agent-card .score { font-size: 16px; font-weight: 700; margin-top: 6px; }
+.agent-card .score.high { color: #f85149; }
+.agent-card .score.low { color: #3fb950; }
+.event-item { font-size: 12px; padding: 6px 0; border-bottom: 1px solid #21262d; display: flex; gap: 8px; }
+.event-item .time { color: #484f58; min-width: 60px; }
+.event-item .type { font-weight: 600; min-width: 130px; }
+.event-item .type.program_received { color: #d2a8ff; }
+.event-item .type.program_executed { color: #3fb950; }
+.event-item .type.peer_discovered { color: #58a6ff; }
+.event-item .type.peer_lost { color: #f85149; }
+.event-item .type.seed_connected { color: #79c0ff; }
+.event-item .type.llm_request { color: #d29922; }
+.event-item .detail { color: #8b949e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.consensus-bar { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-top: 8px; }
+.consensus-bar .label { font-size: 12px; color: #8b949e; }
+.consensus-bar .value { font-size: 24px; font-weight: 700; color: #d2a8ff; margin-top: 4px; }
+.consensus-bar .strategy { font-size: 11px; color: #484f58; }
+.input-bar { grid-column: 1 / -1; display: flex; gap: 8px; }
+.input-bar input { flex: 1; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px 14px; color: #c9d1d9; font-family: inherit; font-size: 13px; }
+.input-bar input:focus { outline: none; border-color: #58a6ff; }
+.input-bar button { background: #238636; border: none; border-radius: 6px; padding: 10px 20px; color: #fff; font-family: inherit; font-size: 13px; cursor: pointer; font-weight: 600; }
+.input-bar button:hover { background: #2ea043; }
+.input-bar button:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+.empty { color: #484f58; font-size: 13px; font-style: italic; padding: 20px 0; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>NML Collective</h1>
+  <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">Connecting...</span></div>
+</div>
+
+<div class="container">
+  <div class="panel mesh-panel">
+    <h2>Mesh Topology</h2>
+    <canvas class="mesh-canvas" id="meshCanvas"></canvas>
+  </div>
+
+  <div class="panel agents-panel">
+    <h2>Agents</h2>
+    <div id="agentCards"><div class="empty">No agents discovered</div></div>
+    <div class="consensus-bar" id="consensusBar" style="display:none">
+      <div class="label">VOTE Consensus</div>
+      <div class="value" id="consensusValue">—</div>
+      <div class="strategy" id="consensusStrategy"></div>
+    </div>
+  </div>
+
+  <div class="panel feed-panel">
+    <h2>Event Feed</h2>
+    <div id="eventFeed"><div class="empty">Waiting for events...</div></div>
+  </div>
+
+  <div class="input-bar">
+    <input type="text" id="seedInput" placeholder="Enter agent URL (e.g. http://localhost:9001)" />
+    <button id="connectBtn" onclick="connectToAgent()">Connect</button>
+    <button id="submitBtn" onclick="submitProgram()" disabled>Submit Program</button>
+    <button id="consensusBtn" onclick="requestConsensus()" disabled>VOTE</button>
+  </div>
+</div>
+
+<script>
+const agents = {};
+let allEvents = [];
+let knownSeed = null;
+const wsConnections = {};
+
+function connectToAgent() {
+  const url = document.getElementById('seedInput').value.trim();
+  if (!url) return;
+  knownSeed = url;
+  document.getElementById('connectBtn').disabled = true;
+  document.getElementById('connectBtn').textContent = 'Connected';
+  document.getElementById('submitBtn').disabled = false;
+  document.getElementById('consensusBtn').disabled = false;
+  connectWS(url);
+}
+
+function connectWS(agentUrl) {
+  const wsUrl = agentUrl.replace('http://', 'ws://').replace('https://', 'wss://') + '/ws';
+  if (wsConnections[wsUrl]) return;
+
+  const ws = new WebSocket(wsUrl);
+  wsConnections[wsUrl] = ws;
+
+  ws.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.state) {
+        const state = data.state;
+        agents[state.name] = { ...state, url: agentUrl, lastPoll: Date.now() };
+
+        if (state.recent_events) {
+          for (const ev of state.recent_events) {
+            const key = state.name + ':' + ev.time + ':' + ev.type;
+            if (!allEvents.find(x => x.key === key)) {
+              allEvents.push({ ...ev, agent: state.name, key });
+            }
+          }
+        }
+
+        for (const p of state.peers || []) {
+          if (p.url && !wsConnections[p.url.replace('http://','ws://') + '/ws']) {
+            connectWS(p.url);
+          }
+        }
+      }
+      updateUI();
+    } catch (err) {}
+  };
+
+  ws.onclose = () => {
+    delete wsConnections[wsUrl];
+    setTimeout(() => {
+      if (knownSeed) connectWS(agentUrl);
+    }, 3000);
+  };
+
+  ws.onerror = () => {};
+}
+
+/* HTTP fallback — poll once on connect to bootstrap, then rely on WS */
+async function pollOnce(url) {
+  try {
+    const resp = await fetch(url + '/state');
+    const state = await resp.json();
+    agents[state.name] = { ...state, url: url, lastPoll: Date.now() };
+    if (state.recent_events) {
+      for (const e of state.recent_events) {
+        const key = state.name + ':' + e.time + ':' + e.type;
+        if (!allEvents.find(x => x.key === key)) {
+          allEvents.push({ ...e, agent: state.name, key });
+        }
+      }
+    }
+    for (const p of state.peers || []) {
+      if (p.url && !agents[p.name]) connectWS(p.url);
+    }
+    updateUI();
+  } catch (e) {}
+}
+
+function updateUI() {
+  const agentList = Object.values(agents);
+  document.getElementById('statusText').textContent =
+    agentList.length + ' agent' + (agentList.length !== 1 ? 's' : '') + ' in collective';
+
+  let cards = '';
+  for (const a of agentList) {
+    const score = a.last_result?.score;
+    const scoreClass = score != null ? (score >= 0.5 ? 'high' : 'low') : '';
+    const scoreText = score != null ? score.toFixed(4) : '—';
+    cards += `<div class="agent-card active">
+      <div class="name">${a.name}</div>
+      <div class="meta">${a.url} · ${a.peer_count} peers · ${a.programs_received} programs · ${a.uptime_seconds}s uptime</div>
+      <div class="score ${scoreClass}">${scoreText}</div>
+    </div>`;
+  }
+  document.getElementById('agentCards').innerHTML = cards || '<div class="empty">No agents</div>';
+
+  allEvents.sort((a, b) => b.time - a.time);
+  const recentEvents = allEvents.slice(0, 50);
+  let feed = '';
+  for (const e of recentEvents) {
+    feed += `<div class="event-item">
+      <span class="time">${e.time.toFixed(1)}s</span>
+      <span class="type ${e.type}">${e.type}</span>
+      <span class="detail">[${e.agent}] ${e.detail}</span>
+    </div>`;
+  }
+  document.getElementById('eventFeed').innerHTML = feed || '<div class="empty">No events</div>';
+
+  drawMesh(agentList);
+}
+
+function drawMesh(agentList) {
+  const canvas = document.getElementById('meshCanvas');
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * 2;
+  canvas.height = rect.height * 2;
+  ctx.scale(2, 2);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+
+  if (agentList.length === 0) return;
+
+  const cx = rect.width / 2;
+  const cy = rect.height / 2;
+  const radius = Math.min(cx, cy) - 40;
+
+  const positions = {};
+  agentList.forEach((a, i) => {
+    const angle = (2 * Math.PI * i) / agentList.length - Math.PI / 2;
+    positions[a.name] = {
+      x: cx + radius * Math.cos(angle),
+      y: cy + radius * Math.sin(angle),
+    };
+  });
+
+  ctx.strokeStyle = '#30363d';
+  ctx.lineWidth = 1;
+  for (const a of agentList) {
+    const from = positions[a.name];
+    for (const p of (a.peers || [])) {
+      const to = positions[p.name];
+      if (from && to) {
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+      }
+    }
+  }
+
+  for (const a of agentList) {
+    const pos = positions[a.name];
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, 16, 0, 2 * Math.PI);
+    ctx.fillStyle = a.programs_received > 0 ? '#238636' : '#30363d';
+    ctx.fill();
+    ctx.strokeStyle = '#58a6ff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = '#f0f6fc';
+    ctx.font = '11px SF Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(a.name, pos.x, pos.y + 30);
+
+    if (a.last_result?.score != null) {
+      ctx.fillStyle = a.last_result.score >= 0.5 ? '#f85149' : '#3fb950';
+      ctx.font = 'bold 10px SF Mono, monospace';
+      ctx.fillText(a.last_result.score.toFixed(3), pos.x, pos.y + 42);
+    }
+  }
+}
+
+async function submitProgram() {
+  if (!knownSeed) return;
+  try {
+    const progResp = await fetch('/fraud_detection.nml');
+    let program;
+    if (progResp.ok) {
+      program = await progResp.text();
+    } else {
+      program = `LD    R1 @w1\nLD    R2 @b1\nLD    R3 @w2\nLD    R4 @b2\nLD    R0 @training_data\nLD    R9 @training_labels\nTNET  #1000  #0.01  #0\nST    R8 @training_loss\nLD    R0 @new_transaction\nMMUL  R5 R0 R1\nMADD  R5 R5 R2\nRELU  R5 R5\nMMUL  R6 R5 R3\nMADD  R6 R6 R4\nSIGM  RA R6\nST    RA @fraud_score\nCMPI  RE RA #0.5\nJMPF  #2\nLEAF  RB #0.0\nJUMP  #1\nLEAF  RB #1.0\nST    RB @decision\nHALT`;
+    }
+    await fetch(knownSeed + '/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ program }),
+    });
+  } catch (e) {
+    console.error('Submit failed:', e);
+  }
+}
+
+async function requestConsensus() {
+  if (!knownSeed) return;
+  try {
+    const resp = await fetch(knownSeed + '/consensus', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ strategy: 'median' }),
+    });
+    const data = await resp.json();
+    if (data.consensus != null) {
+      document.getElementById('consensusBar').style.display = 'block';
+      document.getElementById('consensusValue').textContent = data.consensus.toFixed(4);
+      document.getElementById('consensusStrategy').textContent =
+        `Strategy: ${data.strategy} · ${data.count} agents`;
+    }
+  } catch (e) {
+    console.error('Consensus failed:', e);
+  }
+}
+
+window.addEventListener('resize', () => {
+  if (Object.keys(agents).length > 0) drawMesh(Object.values(agents));
+});
+</script>
+</body>
+</html>

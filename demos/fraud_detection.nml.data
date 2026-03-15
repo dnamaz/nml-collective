@@ -1,0 +1,29 @@
+# Credit Card Fraud Detection — Training & Test Data
+# ══════════════════════════════════════════════════
+# 10 labeled transactions for training, 1 for inference
+#
+# Features: [amount, time_delta, distance, hourly_freq, is_foreign, merchant_risk]
+# Labels:   0 = legitimate, 1 = fraudulent
+
+# Training data: 10 transactions × 6 features
+# Rows 1-5: legitimate  |  Rows 6-10: fraudulent
+@training_data shape=10,6 data=0.12,0.85,0.03,0.15,0.0,0.10,0.25,0.50,0.08,0.25,0.0,0.15,0.08,0.95,0.01,0.10,0.0,0.05,0.30,0.40,0.12,0.35,0.0,0.20,0.18,0.60,0.05,0.20,1.0,0.15,0.92,0.04,0.88,0.90,1.0,0.85,0.85,0.08,0.82,0.80,1.0,0.90,0.88,0.02,0.91,0.95,0.0,0.75,0.78,0.06,0.76,0.70,1.0,0.65,0.82,0.03,0.72,0.85,0.0,0.80
+
+@training_labels shape=10,1 data=0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,1.0,1.0
+
+# Incoming transaction to classify
+# High amount, very recent, far from home, high frequency, foreign, risky merchant
+# Expected: fraud (score > 0.5)
+@new_transaction shape=1,6 data=0.75,0.05,0.80,0.72,1.0,0.70
+
+# Hidden layer weights: 6×8 (Xavier initialization)
+@w1 shape=6,8 data=0.25,-0.18,0.32,-0.14,0.28,-0.22,0.19,-0.31,-0.15,0.27,-0.20,0.33,-0.16,0.24,-0.29,0.12,0.35,-0.11,0.26,-0.30,0.14,-0.23,0.30,-0.17,-0.28,0.21,-0.13,0.29,-0.25,0.16,-0.34,0.10,0.22,-0.26,0.15,-0.32,0.20,-0.19,0.31,-0.12,-0.21,0.34,-0.10,0.23,-0.27,0.18,-0.33,0.13
+
+# Hidden layer bias: 1×8
+@b1 shape=1,8 data=0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+
+# Output layer weights: 8×1
+@w2 shape=8,1 data=0.30,-0.25,0.35,-0.20,0.28,-0.15,0.32,-0.22
+
+# Output layer bias: 1×1
+@b2 shape=1,1 data=0.0
