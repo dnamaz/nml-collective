@@ -41,7 +41,7 @@ curl -X POST http://localhost:9001/submit \
   -d "{\"program\": \"$(cat demos/fraud_detection.nml)\"}"
 ```
 
-Get consensus:
+Get consensus (two-phase VOTE — raw scores + oracle assessment + weighted result):
 
 ```bash
 curl -X POST http://localhost:9001/consensus \
@@ -61,6 +61,46 @@ Dashboard Dashboard Dashboard  (self-hosted on every agent)
 ```
 
 No single point of failure. Kill any agent and the rest keep running.
+
+### Agent Roles
+
+| Role | Purpose | Executes? | Writes Nebula? |
+|------|---------|-----------|----------------|
+| **Sentient** | Signs programs, approves data, embeds nebula | No | Yes |
+| **Worker** | Submits data, executes programs, reports results | Yes | Quarantine only |
+| **Oracle** | Observes all agents, answers questions via LLM, generates specs | No | Votes with analysis |
+| **Architect** | Generates NML programs from specs via NML LLM | Dry-run only | No |
+
+## Oracle (Knowledge Layer)
+
+The Oracle observes everything and decides nothing. She tracks every agent in the mesh, aggregates events, reads the Nebula ledger, and connects to an LLM for deep inference reasoning.
+
+```bash
+# Start an Oracle (connects to all agents, answers questions)
+python3 serve/nml_collective.py --name sibyl --port 9004 \
+    --seeds http://localhost:9001 --role oracle --llm http://localhost:8082
+
+# Ask a question
+curl -X POST http://localhost:9004/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Which agents have executed programs and what were their scores?"}'
+
+# Get full collective context
+curl http://localhost:9004/context
+
+# Get recommendations
+curl http://localhost:9004/recommend
+
+# Explain a specific program or data hash
+curl "http://localhost:9004/explain?hash=958c212f"
+```
+
+The Oracle works without an LLM (structured data answers), but connects to one via `--llm` for deep reasoning. She never executes programs, never signs anything, never approves data — she only observes and answers.
+
+```bash
+# Full demo: sentient + 2 workers + oracle
+bash demos/oracle_demo.sh
+```
 
 ## Nebula (Persistent Storage)
 
@@ -115,6 +155,12 @@ bash demos/collective_demo.sh
 
 # Distributed fraud detection: sign + distribute + train + vote + patch
 bash demos/distributed_fraud.sh
+
+# Oracle demo: sentient + workers + oracle + ask questions
+bash demos/oracle_demo.sh
+
+# Architect demo: full pipeline Oracle → Architect → Sentient → Workers
+bash demos/architect_demo.sh --llm=http://localhost:8082
 ```
 
 ## Agent Endpoints
@@ -133,6 +179,15 @@ bash demos/distributed_fraud.sh
 | `/ws` | GET | WebSocket push (real-time updates) |
 | `/dashboard` | GET | Self-hosted web dashboard |
 | `/discover` | GET | All known agent URLs |
+| `/ask` | POST | Ask the Oracle a question (oracle only) |
+| `/context` | GET | Oracle's full collective awareness (oracle only) |
+| `/explain` | GET | Explain a program/data hash (oracle only) |
+| `/recommend` | GET | Oracle's recommendations (oracle only) |
+| `/assess` | POST | Oracle assesses consensus scores (oracle only) |
+| `/spec` | POST | Oracle generates program spec (oracle only) |
+| `/build` | POST | Architect builds NML from spec (architect only) |
+| `/validate` | POST | Architect validates NML program (architect only) |
+| `/catalog` | GET | Architect's built programs (architect only) |
 
 ## Dependencies
 

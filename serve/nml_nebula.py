@@ -159,10 +159,16 @@ class Nebula:
     # Data Submission + Quarantine
     # ═══════════════════════════════════════════
 
-    def submit_data(self, name, content, author="worker"):
-        """Worker submits data — goes to quarantine."""
-        entry = LedgerEntry(EntryType.DATA, content, author=author,
-                            meta={"name": name})
+    def submit_data(self, name, content, author="worker", context=None):
+        """Worker submits data — goes to quarantine.
+
+        context: optional dict with description, source, time_range, features,
+                 domain, tags for rich metadata.
+        """
+        meta = {"name": name}
+        if context:
+            meta["context"] = context
+        entry = LedgerEntry(EntryType.DATA, content, author=author, meta=meta)
         entry.status = Status.PENDING
 
         auto = self._auto_check(name, content)
@@ -173,7 +179,8 @@ class Nebula:
 
         if self.disk:
             from nml_storage import OBJ_DATA, TX_DATA_SUBMIT
-            self.disk.store(content, obj_type=OBJ_DATA, author=author, name=name)
+            self.disk.store(content, obj_type=OBJ_DATA, author=author, name=name,
+                            context=context)
             if self.index:
                 shape = []
                 if isinstance(content, str) and "shape=" in content:
@@ -183,12 +190,16 @@ class Nebula:
                     except (ValueError, IndexError):
                         pass
                 self.index.index_object(entry.hash, "data", name, author,
-                                        entry.timestamp, entry.status, len(content), shape)
+                                        entry.timestamp, entry.status, len(content),
+                                        shape, context=context)
             if self.vectors:
-                self.vectors.embed_data(entry.hash, content)
+                self.vectors.embed_data(entry.hash, content, context=context)
             txlog = self.get_tx_log(author)
             if txlog:
-                txlog.append(TX_DATA_SUBMIT, {"hash": entry.hash, "name": name, "author": author})
+                txlog.append(TX_DATA_SUBMIT, {
+                    "hash": entry.hash, "name": name, "author": author,
+                    "context": context,
+                })
 
         self._emit("data_quarantined", f"@{name} hash={entry.hash} by {author} auto={'PASS' if auto.passed else 'FAIL'}")
 
@@ -229,34 +240,48 @@ class Nebula:
     # Sentient Approval / Rejection
     # ═══════════════════════════════════════════
 
-    def approve(self, data_hash, sentient, reason=""):
-        """Sentient votes to approve quarantined data."""
+    def approve(self, data_hash, voter, reason="", role="sentient", analysis=None):
+        """Vote to approve quarantined data. Sentients and oracles can vote."""
         entry = self.quarantine.get(data_hash)
         if not entry or entry.status != Status.PENDING:
             return None
 
-        entry.votes.append({"sentient": sentient, "vote": "approve", "reason": reason, "time": time.time()})
+        vote = {
+            "voter": voter, "role": role, "vote": "approve",
+            "reason": reason, "time": time.time(),
+        }
+        if analysis:
+            vote["analysis"] = analysis
+        entry.votes.append(vote)
 
         if self.disk:
             from nml_storage import TX_DATA_APPROVE
-            txlog = self.get_tx_log(sentient)
+            txlog = self.get_tx_log(voter)
             if txlog:
-                txlog.append(TX_DATA_APPROVE, {"hash": data_hash, "reason": reason}, refs=[data_hash])
+                txlog.append(TX_DATA_APPROVE, {
+                    "hash": data_hash, "reason": reason, "role": role,
+                }, refs=[data_hash])
 
-        self._emit("vote_approve", f"{data_hash} by {sentient}")
+        self._emit("vote_approve", f"{data_hash} by {voter} ({role})")
 
         if self._check_quorum(entry):
             self._promote(entry)
 
         return entry
 
-    def reject(self, data_hash, sentient, reason=""):
-        """Sentient votes to reject quarantined data."""
+    def reject(self, data_hash, voter, reason="", role="sentient", analysis=None):
+        """Vote to reject quarantined data. Sentients and oracles can vote."""
         entry = self.quarantine.get(data_hash)
         if not entry or entry.status != Status.PENDING:
             return None
 
-        entry.votes.append({"sentient": sentient, "vote": "reject", "reason": reason, "time": time.time()})
+        vote = {
+            "voter": voter, "role": role, "vote": "reject",
+            "reason": reason, "time": time.time(),
+        }
+        if analysis:
+            vote["analysis"] = analysis
+        entry.votes.append(vote)
         entry.status = Status.REJECTED
         entry.reason = reason
 
@@ -264,19 +289,28 @@ class Nebula:
             self.index.update_status(data_hash, "rejected")
         if self.disk:
             from nml_storage import TX_DATA_REJECT
-            txlog = self.get_tx_log(sentient)
+            txlog = self.get_tx_log(voter)
             if txlog:
-                txlog.append(TX_DATA_REJECT, {"hash": data_hash, "reason": reason})
+                txlog.append(TX_DATA_REJECT, {"hash": data_hash, "reason": reason, "role": role})
 
-        self._emit("vote_reject", f"{data_hash} by {sentient}: {reason}")
+        self._emit("vote_reject", f"{data_hash} by {voter} ({role}): {reason}")
         return entry
 
     def _check_quorum(self, entry):
+        """Quorum: count sentient + oracle approve votes.
+        Oracle votes count as 1 vote. Need majority of known sentients."""
+        approve_votes = [v for v in entry.votes if v["vote"] == "approve"]
         if not self.sentients:
-            return len(entry.votes) >= 1
-        approve_count = sum(1 for v in entry.votes if v["vote"] == "approve")
-        needed = max(1, int(len(self.sentients) * self.quorum) + 1)
-        return approve_count >= needed
+            return len(approve_votes) >= 1
+
+        sentient_approves = sum(1 for v in approve_votes if v.get("role") == "sentient")
+        oracle_approves = sum(1 for v in approve_votes if v.get("role") == "oracle")
+
+        sentient_needed = max(1, int(len(self.sentients) * self.quorum) + 1)
+        # Oracle vote can substitute for one sentient vote when combined with at least one sentient
+        effective_approves = sentient_approves + (min(oracle_approves, 1) if sentient_approves > 0 else 0)
+
+        return effective_approves >= sentient_needed
 
     def _promote(self, entry):
         """Promote quarantined data to the approved data pool."""
@@ -356,37 +390,66 @@ class Nebula:
     # Consensus
     # ═══════════════════════════════════════════
 
-    def compute_consensus(self, program_hash, strategy="median"):
+    def compute_consensus(self, program_hash, strategy="median", weights=None):
+        """Compute consensus with optional per-agent weights from sentients.
+
+        weights: dict of {agent_name: float} where 1.0 = full trust, 0.0 = ignore.
+        Returns both raw and weighted results.
+        """
         execs = [e for e in self.executions
                  if e["program_hash"] == program_hash and e["score"] is not None]
         if not execs:
             return None
 
         scores = [e["score"] for e in execs]
-        if strategy == "median":
-            scores.sort()
-            mid = len(scores) // 2
-            result = scores[mid] if len(scores) % 2 == 1 else (scores[mid-1] + scores[mid]) / 2
-        elif strategy == "mean":
-            result = sum(scores) / len(scores)
-        elif strategy == "min":
-            result = min(scores)
-        elif strategy == "max":
-            result = max(scores)
-        else:
-            result = sum(scores) / len(scores)
+        raw_result = self._compute_strategy(scores, strategy)
+
+        agent_entries = [{"agent": e["agent"], "score": e["score"]} for e in execs]
+
+        weighted_result = raw_result
+        if weights:
+            weighted_scores = []
+            weighted_entries = []
+            for e in execs:
+                w = weights.get(e["agent"], 1.0)
+                weighted_entries.append({
+                    "agent": e["agent"], "score": e["score"], "weight": round(w, 3),
+                })
+                weighted_scores.extend([e["score"]] * max(1, round(w * 10)))
+            if weighted_scores:
+                weighted_result = self._compute_strategy(weighted_scores, strategy)
+            agent_entries = weighted_entries
 
         consensus = {
             "program_hash": program_hash,
             "strategy": strategy,
-            "consensus": result,
+            "raw_consensus": raw_result,
+            "consensus": weighted_result,
+            "weighted": weights is not None and len(weights) > 0,
             "count": len(scores),
-            "agents": [{"agent": e["agent"], "score": e["score"]} for e in execs],
+            "agents": agent_entries,
             "timestamp": time.time(),
         }
         self.consensus[program_hash] = consensus
-        self._emit("consensus", f"prog={program_hash} {strategy}={result:.4f} ({len(scores)} agents)")
+        label = "weighted " if consensus["weighted"] else ""
+        self._emit("consensus", f"prog={program_hash} {label}{strategy}={weighted_result:.4f} ({len(scores)} agents)")
         return consensus
+
+    @staticmethod
+    def _compute_strategy(scores, strategy):
+        if not scores:
+            return 0.0
+        s = sorted(scores)
+        if strategy == "median":
+            mid = len(s) // 2
+            return s[mid] if len(s) % 2 == 1 else (s[mid-1] + s[mid]) / 2
+        elif strategy == "mean":
+            return sum(s) / len(s)
+        elif strategy == "min":
+            return min(s)
+        elif strategy == "max":
+            return max(s)
+        return sum(s) / len(s)
 
     # ═══════════════════════════════════════════
     # Manifests

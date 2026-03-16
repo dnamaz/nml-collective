@@ -53,8 +53,8 @@ class NebulaDisk:
         return self.objects_dir / prefix / f"{hash_hex}.obj"
 
     def store(self, content, obj_type=OBJ_DATA, author="system",
-              shape=None, dtype=DTYPE_TEXT, name=""):
-        """Store content as a binary object. Returns hash."""
+              shape=None, dtype=DTYPE_TEXT, name="", context=None):
+        """Store content as a binary object with optional context sidecar. Returns hash."""
         content_bytes = content.encode("utf-8") if isinstance(content, str) else content
         hash_hex = hashlib.sha256(content_bytes).hexdigest()[:16]
 
@@ -82,7 +82,20 @@ class NebulaDisk:
             f.write(bytes(header))
             f.write(content_bytes)
 
+        if context:
+            ctx_path = path.with_suffix(".ctx.json")
+            with open(ctx_path, "w") as f:
+                json.dump(context, f)
+
         return hash_hex
+
+    def load_context(self, hash_hex):
+        """Load the context sidecar for an object, or None."""
+        ctx_path = self._obj_path(hash_hex).with_suffix(".ctx.json")
+        if ctx_path.exists():
+            with open(ctx_path) as f:
+                return json.load(f)
+        return None
 
     def load(self, hash_hex):
         """Load an object by hash. Returns (header_dict, content_bytes) or None."""
@@ -306,7 +319,11 @@ CREATE TABLE IF NOT EXISTS objects (
     timestamp REAL,
     status TEXT,
     content_size INTEGER,
-    shape TEXT
+    shape TEXT,
+    domain TEXT,
+    description TEXT,
+    tags TEXT,
+    features TEXT
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -343,6 +360,8 @@ CREATE TABLE IF NOT EXISTS consensus (
 CREATE INDEX IF NOT EXISTS idx_objects_status ON objects(status);
 CREATE INDEX IF NOT EXISTS idx_objects_name ON objects(name);
 CREATE INDEX IF NOT EXISTS idx_objects_author ON objects(author);
+CREATE INDEX IF NOT EXISTS idx_objects_domain ON objects(domain);
+CREATE INDEX IF NOT EXISTS idx_objects_tags ON objects(tags);
 CREATE INDEX IF NOT EXISTS idx_tx_agent ON transactions(agent);
 CREATE INDEX IF NOT EXISTS idx_tx_type ON transactions(type);
 CREATE INDEX IF NOT EXISTS idx_exec_program ON executions(program_hash);
@@ -362,11 +381,17 @@ class NebulaIndex:
         self.conn.commit()
 
     def index_object(self, hash_hex, obj_type, name, author, timestamp,
-                     status, content_size, shape=None):
+                     status, content_size, shape=None, context=None):
         shape_str = ",".join(str(d) for d in shape) if shape else ""
+        ctx = context or {}
+        domain = ctx.get("domain", "")
+        description = ctx.get("description", "")
+        tags = ",".join(ctx.get("tags", []))
+        features = ",".join(ctx.get("features", []))
         self.conn.execute(
-            "INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?,?,?,?)",
-            (hash_hex, obj_type, name, author, timestamp, status, content_size, shape_str)
+            "INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (hash_hex, obj_type, name, author, timestamp, status, content_size,
+             shape_str, domain, description, tags, features)
         )
         self.conn.commit()
 
@@ -489,8 +514,8 @@ class NebulaVectors:
         self._save(hash_hex, vec)
         return vec
 
-    def embed_data(self, hash_hex, content):
-        """Embed a data batch by its statistical signature."""
+    def embed_data(self, hash_hex, content, context=None):
+        """Embed a data batch by its statistical signature + context semantics."""
         vec = [0.0] * self.dim
         try:
             if isinstance(content, bytes):
@@ -511,6 +536,7 @@ class NebulaVectors:
             shape_str = content.split("shape=")[1].split()[0] if "shape=" in content else "1"
             dims = [int(d) for d in shape_str.split(",")]
 
+            # Dims 0-9: statistical signature
             vec[0] = mean
             vec[1] = std
             vec[2] = vmin
@@ -518,12 +544,24 @@ class NebulaVectors:
             vec[4] = float(n)
             vec[5] = float(dims[0]) if len(dims) > 0 else 0
             vec[6] = float(dims[1]) if len(dims) > 1 else 0
-            vec[7] = float(sum(1 for v in values if v > 0.5))  # high-value ratio
-            vec[8] = float(sum(1 for v in values if v == 0.0))  # zero count
-            vec[9] = float(sum(1 for v in values if v == 1.0))  # one count
+            vec[7] = float(sum(1 for v in values if v > 0.5))
+            vec[8] = float(sum(1 for v in values if v == 0.0))
+            vec[9] = float(sum(1 for v in values if v == 1.0))
 
         except (ValueError, IndexError):
             pass
+
+        # Dims 32-63: context semantic hashing (domain, tags, features → hash-based embedding)
+        if context:
+            ctx_text = " ".join([
+                context.get("description", ""),
+                context.get("domain", ""),
+                " ".join(context.get("tags", [])),
+                " ".join(context.get("features", [])),
+                context.get("source", ""),
+            ]).lower()
+            for ci, ch in enumerate(ctx_text.encode("utf-8")[:32]):
+                vec[32 + ci] = (ch % 100) / 100.0
 
         vec = self._normalize(vec)
         self._save(hash_hex, vec)

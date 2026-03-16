@@ -107,14 +107,14 @@ done
 echo ""
 echo "━━━ Dashboard ━━━"
 echo "  Starting dashboard on :$DASHBOARD_PORT"
-python3 -m http.server $DASHBOARD_PORT --directory terminal --bind 127.0.0.1 &>/dev/null &
+python3 -m http.server $DASHBOARD_PORT --directory dashboard --bind 127.0.0.1 &>/dev/null &
 PIDS+=($!)
 sleep 1
 
 # Submit a program to the collective
 echo ""
 echo "━━━ Broadcasting fraud detection program ━━━"
-PROGRAM=$(cat programs/fraud_detection.nml)
+PROGRAM=$(cat demos/fraud_detection.nml)
 HASH=$(curl -s -X POST http://localhost:9001/submit \
     -H "Content-Type: application/json" \
     -d "{\"program\": $(echo "$PROGRAM" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}" \
@@ -160,8 +160,8 @@ echo ""
 echo "═══════════════════════════════════════════════════════"
 echo "  Collective is running."
 echo ""
-echo "  Dashboard: http://localhost:$DASHBOARD_PORT/nml_collective_dashboard.html"
-echo "    → Enter http://localhost:9001 and click Connect"
+echo "  Dashboard: http://localhost:9001/dashboard"
+  echo "    (auto-connects to the local agent)"
 echo ""
 echo "  Add a 4th agent:"
 echo "    python3 serve/nml_collective.py --name agent_4 --port 9004 \\"

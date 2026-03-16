@@ -14,10 +14,10 @@ flowchart TB
         training["7B LLM Code Generator\n91% grammar, 84% execution"]
     end
     subgraph collective [NML Collective — github.com/dnamaz/nml-collective]
-        agents["Autonomous Agents\nGossip mesh, UDP multicast\nmDNS, WebSocket relay"]
-        nebula["Nebula\nContent-addressed ledger\nQuarantine + approval"]
-        storage["Three-Layer Storage\nBinary tensors + chains\nSQLite + vectors"]
-        dashboard["Real-Time Dashboard\nWebSocket push\nNebula visualization"]
+        agents["Four Agent Roles\nSentient · Worker · Oracle · Architect\nGossip mesh, UDP multicast"]
+        nebula["Nebula\nContent-addressed ledger\nQuarantine + multi-role voting"]
+        storage["Three-Layer Storage\nBinary tensors + chains\nSQLite + context vectors"]
+        dashboard["Role-Aware Dashboard\nWebSocket push\n3D visualization"]
     end
     subgraph domain [Domain — private]
         models["Trained Models\nnml-next-merged (7B)"]
@@ -105,20 +105,28 @@ flowchart TB
         relay_disc["WebSocket Relay\nws://relay:7777\nCross-network"]
         seeds_disc["HTTP Seeds\n--seeds URL\nManual fallback"]
     end
-    subgraph roles [Two Roles]
+    subgraph roles [Four Roles]
         sentient["Sentient\nSign programs\nApprove data\nEmbed nebula"]
         worker["Worker\nSubmit data\nExecute programs\nReport results"]
+        oracle_role["Oracle\nObserve all agents\nVote on data quality\nGenerate program specs\nAssess consensus"]
+        architect_role["Architect\nGenerate NML via LLM\nValidate (dry-run)\nShip symbolic compact"]
     end
     mdns --> sentient
     mdns --> worker
+    mdns --> oracle_role
+    mdns --> architect_role
     udp_disc --> sentient
     udp_disc --> worker
+    udp_disc --> oracle_role
+    udp_disc --> architect_role
 ```
 
-- **No orchestrator.** Every agent is a peer. Kill any agent and the rest continue.
-- **Sentients** are authorities: they sign programs, approve data, hold the nebula
-- **Workers** are compute: they observe data, execute programs, report results
-- Each agent serves its own dashboard at `/dashboard`
+- **No orchestrator.** Every agent is a peer with a specialized role. Kill any agent and the rest continue.
+- **[Sentients](ROLE_SENTIENT.md)** are authorities: they sign programs, approve data, hold the nebula
+- **[Workers](ROLE_WORKER.md)** are compute: they submit data, execute programs, report results
+- **[Oracles](ROLE_ORACLE.md)** are knowledge: they observe everything, vote on data quality with analysis, assess consensus, generate program specs
+- **[Architects](ROLE_ARCHITECT.md)** are builders: they generate valid NML programs from specs via the NML LLM in symbolic syntax, validate by dry-run assembly
+- Each agent serves a role-specific dashboard at `/dashboard`
 
 ### Layer 5: Execution
 
@@ -174,54 +182,59 @@ A complete lifecycle of a fraud detection program:
 
 ```mermaid
 sequenceDiagram
-    participant Auth as Authority
-    participant NML as nml-crypto
-    participant S as Sentient (oracle)
+    participant O as Oracle
+    participant A as Architect
+    participant LLM as NML LLM
+    participant S as Sentient
     participant W1 as Worker 1 (US)
     participant W2 as Worker 2 (EU)
     participant W3 as Worker 3 (Asia)
     participant N as Nebula
 
-    Note over Auth: 1. Create and sign
-    Auth->>NML: --keygen → keypair
-    Auth->>NML: --sign fraud_detection.nml
-    NML-->>Auth: signed program (625 bytes)
+    Note over O: 1. Oracle identifies need
+    O->>O: Analyze collective state
+    O->>A: POST /build (program spec)
 
-    Note over S: 2. Distribute
-    Auth->>S: POST /submit (signed program)
+    Note over A,LLM: 2. Architect builds
+    A->>LLM: Generate symbolic NML
+    LLM-->>A: ↓ κ @w1¶↓ λ @b1¶...
+    A->>A: Validate (dry-run assembly)
+    A->>S: POST /submit (symbolic, 340 bytes)
+
+    Note over S: 3. Sentient signs + distributes
+    S->>S: Ed25519 sign
     S->>W1: UDP multicast (1 packet)
     S->>W2: UDP multicast (1 packet)
     S->>W3: UDP multicast (1 packet)
 
-    Note over W1,W3: 3. Execute locally
+    Note over W1,W3: 4. Workers execute locally
     W1->>W1: VRFY → TNET train on US data → score 0.7362
     W2->>W2: VRFY → TNET train on EU data → score 0.7226
     W3->>W3: VRFY → TNET train on Asia data → score 0.7354
 
-    Note over S: 4. Consensus
+    Note over O: 5. Two-phase consensus
     S->>W1: GET /results
     S->>W2: GET /results
     S->>W3: GET /results
-    S->>S: VOTE median = 0.7354 → FRAUD
+    S->>O: POST /assess (scores)
+    O-->>S: {confidence: high, weights, outliers}
+    S->>S: VOTE weighted median = 0.7354 → FRAUD
 
-    Note over N: 5. Persist
-    S->>N: Store program (binary object)
-    S->>N: Log executions (3 entries)
-    S->>N: Store consensus (median=0.7354)
-    N->>N: Index in SQLite
-    N->>N: Compute vector embeddings
+    Note over N: 6. Persist
+    S->>N: Store program + executions + consensus
+    N->>N: Index + vector embeddings
 
-    Note over W1: 6. New data arrives
-    W1->>S: POST /data/submit (new US transactions)
-    S->>N: Quarantine → auto-check
-    S->>S: Sentient approves
+    Note over W1: 7. New data arrives
+    W1->>S: POST /data/submit (new transactions + context)
+    O->>O: Analyze data quality
+    O->>S: Vote approve (score=0.85)
+    S->>S: Sentient approves → quorum met
     S->>N: Promote to data pool
 
-    Note over S: 7. Re-execute with new data
-    S->>W1: Broadcast same program
-    S->>W2: Broadcast same program
-    W1->>W1: TNET retrain on new data → new score
-    S->>S: New VOTE → updated consensus
+    Note over O: 8. Oracle triggers re-execution
+    O->>A: POST /build (updated spec)
+    A->>S: POST /submit (new program)
+    S->>W1: Broadcast → retrain → new VOTE
 ```
 
 ---
@@ -250,7 +263,7 @@ sequenceDiagram
 | Repo | What | Key Files |
 |------|------|-----------|
 | [dnamaz/nml](https://github.com/dnamaz/nml) | Core runtime + ISA + crypto | `runtime/nml.c`, `runtime/nml_crypto.h`, `runtime/tweetnacl.c` |
-| [dnamaz/nml-collective](https://github.com/dnamaz/nml-collective) | Agent mesh + nebula + dashboard | `serve/nml_collective.py`, `serve/nml_nebula.py`, `serve/nml_storage.py` |
+| [dnamaz/nml-collective](https://github.com/dnamaz/nml-collective) | Agent mesh + roles + nebula + dashboard | `serve/nml_collective.py`, `serve/nml_oracle.py`, `serve/nml_architect.py`, `serve/nml_nebula.py`, `serve/nml_storage.py` |
 | domain/ (private) | Trained models + training data | `nml-next-merged` (7B), 440K training pairs |
 
 ---
@@ -267,6 +280,6 @@ sequenceDiagram
 
 5. **The collective never forgets.** Data is classified (approved, rejected, superseded), never deleted. Bad data trains the guards. The ledger is append-only.
 
-6. **Roles are the incentive.** Sentients approve because that's their function. Workers compute because that's their function. The collective is an organism, not a marketplace.
+6. **Roles are the incentive.** Sentients approve because that's their function. Workers compute because that's their function. Oracles observe because that's their function. Architects build because that's their function. The collective is an organism, not a marketplace.
 
 7. **Useful computation, not wasteful mining.** Unlike blockchain proof-of-work, every cycle of computation produces actual value — a fraud score, a risk assessment, a trained model.

@@ -7,26 +7,41 @@ The NML Collective is a decentralized agent mesh where autonomous peers discover
 ```mermaid
 flowchart TB
     subgraph collective [Agent Collective]
-        A1["Agent 1\n:9001"]
-        A2["Agent 2\n:9002"]
-        A3["Agent 3\n:9003"]
-        AN["Agent N\n:900N"]
+        S["Sentient\n(authority)"]
+        W1["Worker 1\n(compute)"]
+        W2["Worker 2\n(compute)"]
+        O["Oracle\n(knowledge)"]
+        A["Architect\n(builder)"]
     end
     subgraph external [External Services]
-        llm["Central LLM\nnml_server.py :8082"]
+        nml_llm["NML LLM\nnml_server.py :8082"]
         relay_svc["WAN Relay\nnml_relay.py :7777"]
     end
-    A1 <-->|gossip| A2
-    A2 <-->|gossip| A3
-    A3 <-->|gossip| AN
-    A1 <-->|gossip| A3
-    A1 -.->|generate| llm
-    A2 -.->|generate| llm
-    A1 <-.->|WAN| relay_svc
-    AN <-.->|WAN| relay_svc
+    S <-->|gossip| W1
+    S <-->|gossip| W2
+    S <-->|gossip| O
+    S <-->|gossip| A
+    W1 <-->|gossip| W2
+    O -.->|observe all| S
+    O -.->|observe all| W1
+    O -.->|observe all| W2
+    O -.->|spec| A
+    A -.->|generate| nml_llm
+    S <-.->|WAN| relay_svc
 ```
 
-**Key principle:** Every agent is identical. There is no leader, no hub, no single point of failure. Kill any agent and the rest continue operating.
+**Key principle:** Every agent is a peer with a specialized role. There is no leader, no hub, no single point of failure. Kill any agent and the rest continue operating.
+
+### Four Roles
+
+| Role | Purpose | Signs | Executes | Votes on Data | Generates Programs |
+|------|---------|-------|----------|---------------|-------------------|
+| [**Sentient**](ROLE_SENTIENT.md) | Authority — signs programs, approves data, embeds Nebula | Yes | Yes | Yes | No |
+| [**Worker**](ROLE_WORKER.md) | Compute — executes programs, submits data, reports results | No | Yes | No | No |
+| [**Oracle**](ROLE_ORACLE.md) | Knowledge — observes all, answers questions, assesses consensus, votes on data quality | No | No | Yes (analysis) | Specs only |
+| [**Architect**](ROLE_ARCHITECT.md) | Builder — generates NML from specs via NML LLM, validates, ships symbolic | No | Dry-run | No | Yes |
+
+See the individual role documents for full details.
 
 ---
 
@@ -140,25 +155,60 @@ NML programs are compact enough to fit in a single UDP packet.
 
 ---
 
-## Consensus (VOTE)
+## Two-Phase Consensus (VOTE)
 
-Any agent can initiate consensus:
+Any agent can initiate consensus. If an Oracle is in the mesh, the result includes assessment and weights.
 
 ```mermaid
 sequenceDiagram
-    participant Requester as Agent 2
-    participant A1 as Agent 1
-    participant A3 as Agent 3
+    participant Req as Requester
+    participant W1 as Worker 1
+    participant W2 as Worker 2
+    participant O as Oracle
 
-    Requester->>Requester: Local result for hash X
-    Requester->>A1: GET /results?program=X
-    A1-->>Requester: {score: 0.7362}
-    Requester->>A3: GET /results?program=X
-    A3-->>Requester: {score: 0.7354}
-    Requester->>Requester: VOTE median(0.7226, 0.7362, 0.7354) = 0.7354
+    Note over Req: Phase 1 — Collect raw scores
+    Req->>W1: GET /results?program=X
+    W1-->>Req: {score: 0.7362}
+    Req->>W2: GET /results?program=X
+    W2-->>Req: {score: 0.7354}
+    Req->>Req: raw median = 0.7354
+
+    Note over O: Phase 2 — Oracle assessment
+    Req->>O: POST /assess {scores}
+    O-->>Req: {confidence: high, weights, outliers}
+    Req->>Req: weighted median = 0.7354
 ```
 
+**Phase 1:** Raw scores collected from executing agents (workers + sentients).
+**Phase 2:** Oracle contributes outlier detection, confidence scoring, per-agent weights, and weighted consensus.
+
 Strategies: `median` (default), `mean`, `min`, `max`.
+
+## Program Pipeline
+
+The full lifecycle from intent to execution:
+
+```mermaid
+sequenceDiagram
+    participant O as Oracle
+    participant A as Architect
+    participant S as Sentient
+    participant W1 as Worker 1
+    participant W2 as Worker 2
+
+    O->>O: Analyze collective needs
+    O->>A: POST /build (spec)
+    A->>A: NML LLM → symbolic
+    A->>A: Validate (dry-run assembly)
+    A->>S: POST /submit (symbolic NML)
+    S->>S: Sign (Ed25519)
+    S->>W1: Broadcast (UDP/HTTP)
+    S->>W2: Broadcast (UDP/HTTP)
+    W1->>W1: Execute + score
+    W2->>W2: Execute + score
+    S->>S: VOTE consensus
+    O->>O: Assess result
+```
 
 ---
 
@@ -213,23 +263,35 @@ flowchart LR
 
 ```
 serve/
-  nml_collective.py    — Autonomous gossip agent (main entry point)
+  nml_collective.py    — Autonomous gossip agent (main entry point, all roles)
+  nml_oracle.py        — Oracle knowledge engine (awareness, Q&A, specs, data voting)
+  nml_architect.py     — Architect program builder (NML LLM, validation, symbolic)
+  nml_nebula.py        — Nebula ledger (quarantine, approval, data pool, consensus)
+  nml_storage.py       — Three-layer storage (disk, SQLite, vectors)
   nml_relay.py         — WebSocket relay for WAN
-  nml_agent.py         — Hub-and-spoke agent (legacy, backward compat)
+  nml_agent.py         — Hub-and-spoke agent (legacy)
 
 dashboard/
-  nml_collective_dashboard.html  — Single-file web UI (HTML+JS+CSS)
+  nml_collective_dashboard.html  — Role-aware single-file web UI
 
 demos/
-  collective_demo.sh             — Start 3 agents + dashboard
+  collective_demo.sh             — 3 agents + fraud detection + consensus
+  oracle_demo.sh                 — Sentient + workers + oracle + Q&A
+  architect_demo.sh              — Full pipeline: oracle → architect → sentient → workers
   distributed_fraud.sh           — Sign + distribute + train + vote + patch
-  fraud_detection.nml            — Example program
-  fraud_detection_symbolic.nml   — Same program, 340 bytes compact
-  fraud_detection.nml.data       — Training + test data
+  nebula_demo.sh                 — Data quarantine + approval + pool
+  fraud_detection.nml            — Example program (classic syntax)
+  fraud_detection_symbolic.nml   — Same program (symbolic, 340 bytes)
   agent{1,2,3}.nml.data          — Regional agent data
 
 docs/
-  ARCHITECTURE.md                — This document
+  ARCHITECTURE.md                — This document (protocols, transport, storage)
+  SYSTEM_ARCHITECTURE.md         — Full 7-layer stack, data flow, metrics
+  NEBULA_DESIGN.md               — Storage design, quarantine, data lifecycle
+  ROLE_SENTIENT.md               — Sentient role specification
+  ROLE_WORKER.md                 — Worker role specification
+  ROLE_ORACLE.md                 — Oracle role specification
+  ROLE_ARCHITECT.md              — Architect role specification
 ```
 
 ---

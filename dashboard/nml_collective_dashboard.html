@@ -34,7 +34,15 @@ canvas#nebula { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z
 .consensus-bar { background: rgba(13,17,23,0.7); border: 1px solid rgba(210,168,255,0.3); border-radius: 6px; padding: 10px; margin-top: 8px; }
 .consensus-bar .label { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; }
 .consensus-bar .value { font-size: 22px; font-weight: 700; color: #d2a8ff; margin-top: 2px; }
+.consensus-bar .raw-value { font-size: 12px; color: #484f58; margin-top: 2px; }
 .consensus-bar .strategy { font-size: 10px; color: #484f58; }
+.confidence-badge { display: inline-block; font-size: 9px; padding: 1px 6px; border-radius: 3px; margin-left: 6px; font-weight: 600; }
+.confidence-badge.high { background: rgba(63,185,80,0.2); color: #3fb950; }
+.confidence-badge.medium { background: rgba(210,153,34,0.2); color: #d29922; }
+.confidence-badge.low { background: rgba(248,81,73,0.2); color: #f85149; }
+.consensus-assessment { font-size: 10px; color: #6e7681; margin-top: 4px; line-height: 1.4; }
+.consensus-outlier { font-size: 10px; color: #f85149; margin-top: 2px; }
+.consensus-weights { font-size: 10px; color: #8b949e; margin-top: 4px; }
 .nebula-stat { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; color: #8b949e; }
 .nebula-stat .val { color: #d2a8ff; font-weight: 600; }
 .quarantine-item { background: rgba(210,168,255,0.08); border: 1px solid rgba(210,168,255,0.2); border-radius: 4px; padding: 6px 8px; margin-top: 4px; font-size: 10px; }
@@ -45,12 +53,64 @@ canvas#nebula { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z
 .role-badge { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-left: 6px; }
 .role-badge.sentient { background: rgba(210,168,255,0.2); color: #d2a8ff; }
 .role-badge.worker { background: rgba(63,185,80,0.2); color: #3fb950; }
-.bottom-bar { position: fixed; bottom: 0; left: 0; right: 340px; z-index: 5; background: rgba(5,8,15,0.85); backdrop-filter: blur(12px); border-top: 1px solid rgba(88,166,255,0.12); padding: 10px 24px; display: flex; gap: 8px; }
-.bottom-bar input { flex: 1; background: rgba(13,17,23,0.8); border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; color: #c9d1d9; font-family: inherit; font-size: 12px; }
-.bottom-bar input:focus { outline: none; border-color: #58a6ff; }
+.role-badge.oracle { background: rgba(210,153,34,0.2); color: #d29922; }
+.role-badge.architect { background: rgba(56,173,169,0.2); color: #38ada9; }
+.architect-stat { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; color: #8b949e; }
+.architect-stat .val { color: #38ada9; font-weight: 600; }
+.catalog-item { background: rgba(56,173,169,0.08); border: 1px solid rgba(56,173,169,0.2); border-radius: 4px; padding: 6px 8px; margin-top: 4px; font-size: 10px; }
+.catalog-item .cat-hash { color: #38ada9; font-weight: 600; }
+.catalog-item .cat-meta { color: #6e7681; }
+.catalog-item .cat-valid { color: #3fb950; }
+.catalog-item .cat-invalid { color: #f85149; }
+.oracle-panel { margin-top: 8px; }
+.oracle-panel .oracle-input-row { display: flex; gap: 4px; margin-top: 6px; }
+.oracle-panel .oracle-input-row input { flex: 1; background: rgba(13,17,23,0.8); border: 1px solid #30363d; border-radius: 4px; padding: 6px 8px; color: #c9d1d9; font-family: inherit; font-size: 11px; }
+.oracle-panel .oracle-input-row input:focus { outline: none; border-color: #d29922; }
+.oracle-panel .oracle-input-row button { background: #7c4d12; border: none; border-radius: 4px; padding: 6px 10px; color: #fff; font-family: inherit; font-size: 10px; cursor: pointer; font-weight: 600; white-space: nowrap; }
+.oracle-panel .oracle-input-row button:hover { background: #9e6215; }
+.oracle-answer { background: rgba(210,153,34,0.08); border: 1px solid rgba(210,153,34,0.2); border-radius: 4px; padding: 8px; margin-top: 6px; font-size: 11px; color: #c9d1d9; white-space: pre-wrap; word-wrap: break-word; max-height: 200px; overflow-y: auto; line-height: 1.5; }
+.oracle-answer .llm-tag { font-size: 9px; color: #d29922; margin-bottom: 4px; }
+.oracle-stat { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; color: #8b949e; }
+.oracle-stat .val { color: #d29922; font-weight: 600; }
+.oracle-recommend { background: rgba(210,153,34,0.06); border: 1px solid rgba(210,153,34,0.15); border-radius: 4px; padding: 6px 8px; margin-top: 4px; font-size: 10px; }
+.oracle-recommend .rec-severity { font-weight: 600; margin-right: 4px; }
+.oracle-recommend .rec-severity.warning { color: #d29922; }
+.oracle-recommend .rec-severity.action { color: #f85149; }
+.oracle-recommend .rec-severity.info { color: #58a6ff; }
+.oracle-recommend .rec-category { color: #6e7681; font-size: 9px; }
+.worker-results { background: rgba(13,17,23,0.7); border: 1px solid rgba(63,185,80,0.3); border-radius: 6px; padding: 10px; margin-top: 8px; }
+.worker-results .wr-label { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; }
+.worker-results .wr-score { font-size: 22px; font-weight: 700; color: #3fb950; margin-top: 2px; }
+.worker-results .wr-hash { font-size: 10px; color: #484f58; }
+.data-submit-form { margin-top: 8px; }
+.data-submit-form input, .data-submit-form textarea { width: 100%; background: rgba(13,17,23,0.8); border: 1px solid #30363d; border-radius: 4px; padding: 6px 8px; color: #c9d1d9; font-family: inherit; font-size: 11px; margin-top: 4px; }
+.data-submit-form textarea { min-height: 50px; resize: vertical; }
+.data-submit-form input:focus, .data-submit-form textarea:focus { outline: none; border-color: #3fb950; }
+.data-submit-form button { background: #238636; border: none; border-radius: 4px; padding: 5px 12px; color: #fff; font-family: inherit; font-size: 10px; cursor: pointer; font-weight: 600; margin-top: 4px; }
+.data-submit-form button:hover { background: #2ea043; }
+.section-hidden { display: none !important; }
+.role-header-badge { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 3px; margin-left: 8px; vertical-align: middle; }
+.role-header-badge.sentient { background: rgba(210,168,255,0.15); color: #d2a8ff; }
+.role-header-badge.worker { background: rgba(63,185,80,0.15); color: #3fb950; }
+.role-header-badge.oracle { background: rgba(210,153,34,0.15); color: #d29922; }
+.role-header-badge.architect { background: rgba(56,173,169,0.15); color: #38ada9; }
+.bottom-bar { position: fixed; bottom: 0; left: 0; right: 340px; z-index: 5; background: rgba(5,8,15,0.85); backdrop-filter: blur(12px); border-top: 1px solid rgba(88,166,255,0.12); padding: 10px 24px; display: flex; gap: 8px; justify-content: flex-end; }
 .bottom-bar button { background: #238636; border: none; border-radius: 6px; padding: 8px 16px; color: #fff; font-family: inherit; font-size: 11px; cursor: pointer; font-weight: 600; }
 .bottom-bar button:hover { background: #2ea043; }
-.bottom-bar button:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+.focus-panel { position: fixed; top: 48px; left: 0; width: 320px; height: calc(100vh - 48px); z-index: 6; background: rgba(10,14,23,0.92); backdrop-filter: blur(14px); border-right: 1px solid rgba(88,166,255,0.12); overflow-y: auto; padding: 16px; transform: translateX(-100%); transition: transform 0.3s ease; }
+.focus-panel.open { transform: translateX(0); }
+.focus-panel h2 { font-size: 11px; color: #58a6ff; text-transform: uppercase; letter-spacing: 2px; margin: 14px 0 6px; }
+.focus-panel h2:first-child { margin-top: 0; }
+.focus-panel .fp-name { font-size: 18px; font-weight: 700; color: #f0f6fc; }
+.focus-panel .fp-close { position: absolute; top: 12px; right: 12px; background: none; border: 1px solid rgba(88,166,255,0.2); border-radius: 4px; color: #8b949e; font-size: 14px; width: 26px; height: 26px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.focus-panel .fp-close:hover { color: #f0f6fc; border-color: rgba(88,166,255,0.4); }
+.fp-detail { font-size: 11px; padding: 3px 0; color: #8b949e; display: flex; justify-content: space-between; }
+.fp-detail .val { color: #c9d1d9; font-weight: 600; }
+.fp-score-big { font-size: 28px; font-weight: 700; margin: 8px 0; }
+.fp-peers-list { font-size: 10px; color: #6e7681; }
+.fp-peers-list span { color: #58a6ff; cursor: pointer; }
+.fp-peers-list span:hover { text-decoration: underline; }
+.fp-event { font-size: 10px; padding: 3px 0; border-bottom: 1px solid rgba(33,38,45,0.4); color: #6e7681; }
 </style>
 </head>
 <body>
@@ -62,33 +122,105 @@ canvas#nebula { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z
 
 <canvas id="nebula"></canvas>
 
+<div class="focus-panel" id="focusPanel">
+  <button class="fp-close" onclick="deselectAgent()">&times;</button>
+  <div id="focusContent"></div>
+</div>
+
 <div class="sidebar">
   <h2>Agents</h2>
   <div id="agentCards"><div style="color:#484f58;font-size:11px;padding:20px 0;text-align:center">No agents discovered</div></div>
-  <div class="consensus-bar" id="consensusBar" style="display:none">
-    <div class="label">Vote Consensus</div>
-    <div class="value" id="consensusValue">-</div>
-    <div class="strategy" id="consensusStrategy"></div>
+
+  <!-- Worker: execution results -->
+  <div id="sectionWorkerResults" class="section-hidden">
+    <h2>My Results</h2>
+    <div id="workerResults"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No programs executed</div></div>
+    <div class="consensus-bar" id="consensusBar" style="display:none">
+      <div class="label">Vote Consensus</div>
+      <div class="value" id="consensusValue">-</div>
+      <div class="strategy" id="consensusStrategy"></div>
+    </div>
   </div>
-  <h2>Nebula</h2>
-  <div id="nebulaStats"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No sentient connected</div></div>
-  <div id="quarantineList"></div>
+
+  <!-- Sentient: Nebula management -->
+  <div id="sectionNebula">
+    <h2>Nebula</h2>
+    <div id="nebulaStats"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No sentient connected</div></div>
+    <div id="quarantineList"></div>
+  </div>
+
+  <!-- Worker: data submission -->
+  <div id="sectionDataSubmit" class="section-hidden">
+    <h2>Submit Data</h2>
+    <div class="data-submit-form">
+      <input type="text" id="dataName" placeholder="@name (e.g. transactions_batch_47)" />
+      <textarea id="dataContent" placeholder="shape=6,500 data=0.1,0.2,..."></textarea>
+      <input type="text" id="dataDescription" placeholder="Description (e.g. US East transactions March 2026)" />
+      <input type="text" id="dataDomain" placeholder="Domain (e.g. fraud_detection)" />
+      <input type="text" id="dataTags" placeholder="Tags (comma-separated, e.g. us_east, march)" />
+      <input type="text" id="dataFeatures" placeholder="Features (comma-separated, e.g. amount, frequency, risk)" />
+      <button onclick="submitData()">Submit to Quarantine</button>
+      <div id="dataSubmitResult"></div>
+    </div>
+  </div>
+
+  <!-- Oracle: knowledge panel -->
+  <div id="sectionOracle">
+    <h2>Oracle</h2>
+    <div id="oracleStats"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No oracle connected</div></div>
+    <div id="oracleInteractive" style="display:none">
+      <div class="oracle-panel">
+        <div class="oracle-input-row">
+          <input type="text" id="oracleInput" placeholder="Ask the Oracle..." onkeydown="if(event.key==='Enter')askOracle()"/>
+          <button onclick="askOracle()">Ask</button>
+        </div>
+        <div id="oracleAnswer"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Architect: build panel + catalog -->
+  <div id="sectionArchitect" class="section-hidden">
+    <h2>Architect</h2>
+    <div id="architectStats"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No architect connected</div></div>
+    <div id="architectCatalog"></div>
+  </div>
+
+  <!-- Oracle: recommendations -->
+  <div id="sectionRecommend" class="section-hidden">
+    <h2>Recommendations</h2>
+    <div id="oracleRecommendations"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">Loading...</div></div>
+  </div>
+
   <h2>Event Feed</h2>
   <div id="eventFeed"><div style="color:#484f58;font-size:11px;padding:20px 0;text-align:center">Waiting for events...</div></div>
 </div>
 
-<div class="bottom-bar">
-  <input type="text" id="seedInput" placeholder="Agent URL (e.g. http://localhost:9001)" />
-  <button id="connectBtn" onclick="connectToAgent()">Connect</button>
-  <button id="submitBtn" onclick="submitProgram()" disabled>Broadcast</button>
-  <button id="consensusBtn" onclick="requestConsensus()" disabled>VOTE</button>
+<div class="bottom-bar" id="actionBar">
+  <button id="submitBtn" onclick="submitProgram()">Broadcast Program</button>
+  <button id="consensusBtn" onclick="requestConsensus()">VOTE Consensus</button>
 </div>
+<input type="hidden" id="seedInput" />
 
 <script>
 const agents = {};
 let allEvents = [];
 let knownSeed = null;
+let hostRole = null;
+let roleApplied = false;
 const wsConnections = {};
+
+/* ═══════════════════════════════════════════
+   INTERACTION STATE — zoom, selection, focus
+   ═══════════════════════════════════════════ */
+let zoomLevel = 1.0;
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 2.8;
+const ZOOM_NEBULA_STOP = 2.4;
+let selectedAgentName = null;
+let focusAnimT = 0;
+let focusX = 0, focusY = 0;
+let lastAgentHitboxes = [];
 
 /* ═══════════════════════════════════════════
    NEBULA + ORBIT RENDERER
@@ -106,6 +238,125 @@ function resize() {
 }
 resize();
 window.addEventListener('resize', resize);
+
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? -0.08 : 0.08;
+  const maxZoom = selectedAgentName ? ZOOM_MAX : ZOOM_NEBULA_STOP;
+  zoomLevel = Math.max(ZOOM_MIN, Math.min(maxZoom, zoomLevel + delta));
+}, { passive: false });
+
+canvas.addEventListener('click', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (W / rect.width);
+  const my = (e.clientY - rect.top) * (H / rect.height);
+
+  let hit = null;
+  for (const hb of lastAgentHitboxes) {
+    const dx = mx - hb.x, dy = my - hb.y;
+    if (dx * dx + dy * dy < hb.r * hb.r) {
+      hit = hb.name;
+      break;
+    }
+  }
+
+  if (hit) {
+    if (selectedAgentName === hit) {
+      deselectAgent();
+    } else {
+      selectAgent(hit);
+    }
+  } else {
+    deselectAgent();
+  }
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (W / rect.width);
+  const my = (e.clientY - rect.top) * (H / rect.height);
+  let over = false;
+  for (const hb of lastAgentHitboxes) {
+    const dx = mx - hb.x, dy = my - hb.y;
+    if (dx * dx + dy * dy < hb.r * hb.r) { over = true; break; }
+  }
+  canvas.style.cursor = over ? 'pointer' : 'default';
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') deselectAgent();
+});
+
+function selectAgent(name) {
+  selectedAgentName = name;
+  focusAnimT = 0;
+  document.getElementById('focusPanel').classList.add('open');
+  updateFocusPanel();
+}
+
+function deselectAgent() {
+  selectedAgentName = null;
+  focusAnimT = 0;
+  document.getElementById('focusPanel').classList.remove('open');
+}
+
+function updateFocusPanel() {
+  const a = agents[selectedAgentName];
+  if (!a) return;
+
+  const isOracle = a.role === 'oracle';
+  const isSentient = a.role === 'sentient';
+  const isHost = a.url === knownSeed;
+  const roleColor = isOracle ? '#d29922' : (isSentient ? '#d2a8ff' : '#3fb950');
+  const score = a.last_result?.score;
+  const scoreColor = score != null ? (score >= 0.5 ? '#f85149' : '#3fb950') : '#484f58';
+  const scoreText = score != null ? score.toFixed(4) : (isOracle ? 'observing' : 'no score');
+
+  let peersHTML = '';
+  for (const p of (a.peers || [])) {
+    peersHTML += `<span onclick="selectAgent('${p.name}')">${p.name}</span>  `;
+  }
+
+  let eventsHTML = '';
+  const agentEvents = allEvents.filter(e => e.agent === a.name).slice(0, 12);
+  for (const e of agentEvents) {
+    eventsHTML += `<div class="fp-event">${e.time.toFixed(1)}s · ${e.type} · ${e.detail}</div>`;
+  }
+
+  document.getElementById('focusContent').innerHTML = `
+    <div class="fp-name" style="color:${roleColor}">${a.name} ${isHost ? '<span style="color:#8b949e;font-size:11px">(you)</span>' : ''}</div>
+    <span class="role-badge ${a.role}" style="margin:4px 0 8px;display:inline-block">${a.role}</span>
+    <div class="fp-score-big" style="color:${scoreColor}">${scoreText}</div>
+    <h2>Details</h2>
+    <div class="fp-detail"><span>Peers</span><span class="val">${a.peer_count}</span></div>
+    <div class="fp-detail"><span>Programs</span><span class="val">${a.programs_received}</span></div>
+    <div class="fp-detail"><span>Results</span><span class="val">${a.results_count || 0}</span></div>
+    <div class="fp-detail"><span>Uptime</span><span class="val">${Math.round(a.uptime_seconds)}s</span></div>
+    <div class="fp-detail"><span>Local data</span><span class="val">${a.has_local_data ? 'yes' : 'no'}</span></div>
+    <div class="fp-detail"><span>UDP</span><span class="val">${a.udp_enabled ? 'on' : 'off'}</span></div>
+    <div class="fp-detail"><span>mDNS</span><span class="val">${a.mdns_enabled ? 'on' : 'off'}</span></div>
+    <div class="fp-detail"><span>Relay</span><span class="val">${a.relay_connected ? 'connected' : 'off'}</span></div>
+    ${a.last_result?.hash ? `<div class="fp-detail"><span>Last hash</span><span class="val" style="font-size:10px">${a.last_result.hash}</span></div>` : ''}
+    ${a.last_result?.exit_code != null ? `<div class="fp-detail"><span>Exit code</span><span class="val">${a.last_result.exit_code}</span></div>` : ''}
+    ${a.nebula_stats ? `
+    <h2>Nebula</h2>
+    <div class="fp-detail"><span>Programs</span><span class="val">${a.nebula_stats.programs}</span></div>
+    <div class="fp-detail"><span>Approved</span><span class="val">${a.nebula_stats.data_approved}</span></div>
+    <div class="fp-detail"><span>Quarantine</span><span class="val">${a.nebula_stats.quarantine_pending}</span></div>
+    <div class="fp-detail"><span>Ledger</span><span class="val">${a.nebula_stats.ledger_entries}</span></div>
+    ` : ''}
+    ${a.oracle_stats ? `
+    <h2>Oracle</h2>
+    <div class="fp-detail"><span>Tracked</span><span class="val">${a.oracle_stats.collective_size} agents</span></div>
+    <div class="fp-detail"><span>Events</span><span class="val">${a.oracle_stats.events_tracked}</span></div>
+    <div class="fp-detail"><span>LLM</span><span class="val">${a.oracle_stats.llm_connected ? 'connected' : 'none'}</span></div>
+    ` : ''}
+    <h2>Peers</h2>
+    <div class="fp-peers-list">${peersHTML || 'none'}</div>
+    <h2>Recent Events</h2>
+    ${eventsHTML || '<div style="color:#484f58;font-size:10px">No events</div>'}
+  `;
+}
 
 class Particle {
   constructor() { this.reset(); }
@@ -165,39 +416,71 @@ class DataStream {
   }
 }
 
+/* Nebula pulse state — grows when events happen */
+let nebulaPulseTarget = 1.0;
+let nebulaPulseCurrent = 1.0;
+let nebulaLastEventCount = 0;
+
 function drawNebula(time) {
   const cx = W / 2, cy = H / 2;
 
   const active = window._nebulaActive || false;
-  const intensity = active ? 1.5 : 1.0;
   const coreHue = active ? 280 : 230;
 
-  /* Nebula glow layers */
-  const breathe = 0.85 + 0.15 * Math.sin(time * 0.001);
-  for (let layer = 3; layer >= 0; layer--) {
-    const r = (50 + layer * 30) * breathe * intensity;
+  /* Pulse reacts to new events */
+  const eventCount = allEvents.length;
+  if (eventCount > nebulaLastEventCount) {
+    const burst = Math.min((eventCount - nebulaLastEventCount) * 0.15, 0.8);
+    nebulaPulseTarget = Math.min(nebulaPulseCurrent + burst, 2.5);
+    nebulaLastEventCount = eventCount;
+  }
+  nebulaPulseTarget = Math.max(1.0, nebulaPulseTarget - 0.002);
+  nebulaPulseCurrent += (nebulaPulseTarget - nebulaPulseCurrent) * 0.03;
+  const pulse = nebulaPulseCurrent;
+
+  const agentBoost = 1.0 + Object.keys(agents).length * 0.06;
+  const intensity = (active ? 1.5 : 1.0) * pulse * agentBoost;
+
+  /* Nebula glow layers — size scales with pulse */
+  const breathe = 0.85 + 0.15 * Math.sin(time * 0.0008);
+  for (let layer = 4; layer >= 0; layer--) {
+    const baseR = 40 + layer * 28;
+    const r = baseR * breathe * intensity;
     const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    const hue = coreHue + layer * 15;
+    const hue = coreHue + layer * 12;
     const sat = 70 + layer * 5;
-    const alpha = (0.25 - layer * 0.05) * intensity;
+    const alpha = (0.22 - layer * 0.04) * Math.min(intensity, 2.0);
     grad.addColorStop(0, `hsla(${hue}, ${sat}%, 50%, ${alpha})`);
-    grad.addColorStop(0.5, `hsla(${hue + 20}, ${sat}%, 40%, ${alpha * 0.4})`);
+    grad.addColorStop(0.4, `hsla(${hue + 15}, ${sat}%, 45%, ${alpha * 0.5})`);
+    grad.addColorStop(0.7, `hsla(${hue + 30}, ${sat - 10}%, 35%, ${alpha * 0.15})`);
     grad.addColorStop(1, `hsla(${hue}, ${sat}%, 30%, 0)`);
     ctx.fillStyle = grad;
     ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
   }
 
-  /* Core bright point — pulses purple when quarantine has items */
-  const coreR = active ? 18 : 12;
-  const corePulse = active ? 0.8 + 0.2 * Math.sin(time * 0.006) : 0.7 + 0.2 * Math.sin(time * 0.003);
+  /* Outer halo — visible when pulsing */
+  if (pulse > 1.1) {
+    const haloR = 180 * intensity * breathe;
+    const haloAlpha = (pulse - 1.0) * 0.08;
+    const haloGrad = ctx.createRadialGradient(cx, cy, haloR * 0.6, cx, cy, haloR);
+    haloGrad.addColorStop(0, `hsla(${coreHue}, 60%, 50%, ${haloAlpha})`);
+    haloGrad.addColorStop(1, `hsla(${coreHue}, 60%, 30%, 0)`);
+    ctx.fillStyle = haloGrad;
+    ctx.fillRect(cx - haloR, cy - haloR, haloR * 2, haloR * 2);
+  }
+
+  /* Core bright point */
+  const coreR = (active ? 20 : 14) * pulse;
+  const corePulse = active ? 0.8 + 0.2 * Math.sin(time * 0.005) : 0.7 + 0.2 * Math.sin(time * 0.003);
   const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
-  coreGrad.addColorStop(0, `hsla(${coreHue}, 100%, 90%, ${corePulse})`);
+  coreGrad.addColorStop(0, `hsla(${coreHue}, 100%, 92%, ${corePulse})`);
+  coreGrad.addColorStop(0.5, `hsla(${coreHue + 10}, 100%, 70%, ${corePulse * 0.4})`);
   coreGrad.addColorStop(1, `hsla(${coreHue}, 100%, 60%, 0)`);
   ctx.fillStyle = coreGrad;
   ctx.fillRect(cx - coreR, cy - coreR, coreR * 2, coreR * 2);
 
   /* Label */
-  ctx.fillStyle = `rgba(${active ? '210, 168, 255' : '136, 192, 255'}, ${0.4 + 0.1 * Math.sin(time * 0.002)})`;
+  ctx.fillStyle = `rgba(${active ? '210, 168, 255' : '136, 192, 255'}, ${0.35 + 0.1 * Math.sin(time * 0.002)})`;
   ctx.font = '18px SF Mono, monospace';
   ctx.textAlign = 'center';
   ctx.fillText(active ? 'NEBULA' : 'NML', cx / 2, cy / 2 + 80);
@@ -208,80 +491,193 @@ function drawOrbitingAgents(time) {
   if (agentList.length === 0) return;
 
   const cx = W / 2, cy = H / 2;
-  const orbitRadius = Math.min(cx, cy) * 0.35;
+  const sphereRadius = Math.min(cx, cy) * 0.35;
+  const tilt = 0.45;
+  const perspective = 600;
 
-  /* Orbit ring */
-  ctx.beginPath();
-  ctx.arc(cx, cy, orbitRadius, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(88, 166, 255, 0.08)';
+  /* Faint sphere wireframe — equator + meridian */
+  ctx.strokeStyle = 'rgba(88, 166, 255, 0.04)';
   ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, sphereRadius, sphereRadius * Math.sin(tilt), 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, sphereRadius * 0.5, sphereRadius, 0, 0, Math.PI * 2);
   ctx.stroke();
 
-  agentList.forEach((a, i) => {
-    const baseAngle = (2 * Math.PI * i) / agentList.length;
-    const orbitSpeed = 0.0003 + i * 0.00005;
-    const angle = baseAngle + time * orbitSpeed;
-    const wobble = Math.sin(time * 0.002 + i * 1.5) * 8;
+  /* Sort agents by depth (z) for correct overlap */
+  const agentPositions = agentList.map((a, i) => {
+    const n = agentList.length;
+    const lonSpeed = 0.00025 + i * 0.00004;
+    const latSpeed = 0.00012 + i * 0.00003;
+    const lonOffset = (2 * Math.PI * i) / n;
+    const latOffset = (Math.PI * 0.3 * (i % 3 - 1)) + Math.PI * 0.5;
 
-    const x = cx + (orbitRadius + wobble) * Math.cos(angle);
-    const y = cy + (orbitRadius + wobble) * Math.sin(angle);
+    const lon = lonOffset + time * lonSpeed;
+    const lat = latOffset + Math.sin(time * latSpeed + i * 2.1) * 0.6;
+
+    const sx = Math.cos(lat) * Math.cos(lon);
+    const sy = Math.sin(lat) * Math.cos(tilt) + Math.cos(lat) * Math.sin(lon) * Math.sin(tilt);
+    const sz = -Math.cos(lat) * Math.sin(lon) * Math.cos(tilt) + Math.sin(lat) * Math.sin(tilt);
+
+    const scale = perspective / (perspective + sz * sphereRadius);
+    const x = cx + sx * sphereRadius * scale;
+    const y = cy + sy * sphereRadius * scale;
+    const depth = sz;
+
+    return { a, i, x, y, depth, scale };
+  });
+
+  agentPositions.sort((a, b) => a.depth - b.depth);
+
+  lastAgentHitboxes = [];
+
+  agentPositions.forEach(({ a, i, x: orbitX, y: orbitY, depth, scale }) => {
+
+    const isSelected = a.name === selectedAgentName;
+    const hasSelection = selectedAgentName != null;
+
+    /* Selected node locks to focus position (left-center of visible canvas area) */
+    let x, y;
+    if (isSelected) {
+      const targetX = W * 0.35;
+      const targetY = H * 0.45;
+      const t = focusAnimT;
+      const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+      x = orbitX + (targetX - orbitX) * ease;
+      y = orbitY + (targetY - orbitY) * ease;
+    } else {
+      x = orbitX;
+      y = orbitY;
+    }
 
     a._drawX = x;
     a._drawY = y;
 
-    /* Connection lines between peers */
-    for (const p of (a.peers || [])) {
-      const peer = agents[p.name];
-      if (peer && peer._drawX != null) {
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(peer._drawX, peer._drawY);
-        ctx.strokeStyle = 'rgba(88, 166, 255, 0.07)';
-        ctx.lineWidth = 1;
-        ctx.stroke();
+    const hasPrograms = a.programs_received > 0;
+    const isOracle = a.role === 'oracle';
+    const isSentient = a.role === 'sentient';
+    const isArchitect = a.role === 'architect';
+    const isHost = a.url === knownSeed;
+
+    /* Depth-based opacity — nodes behind the sphere are dimmer; unselected dim when something is selected */
+    let depthAlpha = 0.4 + 0.6 * ((depth + 1) / 2);
+    if (hasSelection && !isSelected) depthAlpha *= 0.4;
+    if (isSelected) depthAlpha = 1.0;
+    const s = isSelected ? Math.max(scale, 1.15) : scale;
+
+    /* Connection lines — oracle draws faint golden lines to ALL agents */
+    if (isOracle) {
+      for (const other of agentList) {
+        if (other.name !== a.name && other._drawX != null) {
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(other._drawX, other._drawY);
+          ctx.strokeStyle = `rgba(210, 153, 34, ${0.04 * depthAlpha})`;
+          ctx.setLineDash([4, 4]);
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+    } else {
+      for (const p of (a.peers || [])) {
+        const peer = agents[p.name];
+        if (peer && peer._drawX != null) {
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(peer._drawX, peer._drawY);
+          ctx.strokeStyle = `rgba(88, 166, 255, ${0.06 * depthAlpha})`;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
       }
     }
 
-    /* Agent glow — sentients are purple, workers are blue/green */
-    const hasPrograms = a.programs_received > 0;
-    const isSentient = a.role === 'sentient';
-    const glowHue = isSentient ? 280 : (hasPrograms ? 140 : 220);
-    const glowR = 28 + 4 * Math.sin(time * 0.004 + i);
+    /* Host indicator — pulsing ring around "you" */
+    if (isHost) {
+      const ringAlpha = (0.3 + 0.2 * Math.sin(time * 0.004)) * depthAlpha;
+      const ringR = (20 + 3 * Math.sin(time * 0.003)) * s;
+      ctx.beginPath();
+      ctx.arc(x, y, ringR, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255, 255, 255, ${ringAlpha})`;
+      ctx.lineWidth = 2 * s;
+      ctx.stroke();
+    }
+
+    /* Agent glow */
+    const glowHue = isArchitect ? 174 : (isOracle ? 38 : (isSentient ? 280 : (hasPrograms ? 140 : 220)));
+    const baseGlowR = isOracle ? 34 : (isHost ? 32 : 28);
+    const glowR = (baseGlowR + (isHost ? 6 : 4) * Math.sin(time * 0.004 + i)) * s;
+    const glowAlpha = (isHost ? 0.6 : (isOracle ? 0.5 : 0.4)) * depthAlpha;
     const glow = ctx.createRadialGradient(x, y, 0, x, y, glowR);
-    glow.addColorStop(0, `hsla(${glowHue}, 80%, 60%, 0.4)`);
-    glow.addColorStop(1, `hsla(${glowHue}, 80%, 40%, 0)`);
+    glow.addColorStop(0, `hsla(${glowHue}, ${isOracle ? 90 : 80}%, 60%, ${glowAlpha})`);
+    glow.addColorStop(1, `hsla(${glowHue}, ${isOracle ? 90 : 80}%, 40%, 0)`);
     ctx.fillStyle = glow;
     ctx.fillRect(x - glowR, y - glowR, glowR * 2, glowR * 2);
 
-    /* Agent dot */
+    /* Agent dot — scales with perspective */
+    const baseDotR = isHost ? 11 : (isOracle ? 10 : 8);
+    const dotR = baseDotR * s;
     ctx.beginPath();
-    ctx.arc(x, y, 8, 0, Math.PI * 2);
-    ctx.fillStyle = isSentient ? '#d2a8ff' : (hasPrograms ? '#3fb950' : '#58a6ff');
+    ctx.arc(x, y, dotR, 0, Math.PI * 2);
+    ctx.fillStyle = isArchitect ? '#38ada9' : (isOracle ? '#d29922' : (isSentient ? '#d2a8ff' : (hasPrograms ? '#3fb950' : '#58a6ff')));
+    ctx.globalAlpha = depthAlpha;
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = isHost ? `rgba(255,255,255,${0.6 * depthAlpha})` : `rgba(255,255,255,${0.3 * depthAlpha})`;
+    ctx.lineWidth = (isHost ? 2.5 : 1.5) * s;
     ctx.stroke();
+    ctx.globalAlpha = 1.0;
 
-    /* Name label */
-    ctx.fillStyle = '#c9d1d9';
-    ctx.font = '16px SF Mono, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(a.name, x, y + 28);
+    /* Labels only for nodes in front half (not obscured behind nebula) */
+    if (depth > -0.3) {
+      const fontSize = Math.round(16 * s);
+      ctx.fillStyle = isHost ? `rgba(255,255,255,${depthAlpha})` : `rgba(201,209,217,${depthAlpha})`;
+      ctx.font = `${isHost ? 'bold ' : ''}${fontSize}px SF Mono, monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(a.name, x, y + 22 * s + dotR);
 
-    /* Score */
-    if (a.last_result?.score != null) {
-      ctx.fillStyle = a.last_result.score >= 0.5 ? '#f85149' : '#3fb950';
-      ctx.font = 'bold 14px SF Mono, monospace';
-      ctx.fillText(a.last_result.score.toFixed(3), x, y + 44);
+      if (isHost) {
+        const youSize = Math.round(11 * s);
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.4 * depthAlpha})`;
+        ctx.font = `${youSize}px SF Mono, monospace`;
+        ctx.fillText('(you)', x, y + 22 * s + dotR + youSize + 2);
+      }
+
+      const scoreYOff = isHost ? (22 * s + dotR + 24 * s) : (22 * s + dotR + 14 * s);
+      if (a.last_result?.score != null) {
+        const scoreFontSize = Math.round(14 * s);
+        ctx.fillStyle = a.last_result.score >= 0.5 ? '#f85149' : '#3fb950';
+        ctx.globalAlpha = depthAlpha;
+        ctx.font = `bold ${scoreFontSize}px SF Mono, monospace`;
+        ctx.fillText(a.last_result.score.toFixed(3), x, y + scoreYOff);
+        ctx.globalAlpha = 1.0;
+      } else if (isArchitect && !isHost) {
+        const tagSize = Math.round(11 * s);
+        ctx.fillStyle = `rgba(56, 173, 169, ${0.5 * depthAlpha})`;
+        ctx.font = `${tagSize}px SF Mono, monospace`;
+        ctx.fillText('building', x, y + scoreYOff);
+      } else if (isOracle && !isHost) {
+        const tagSize = Math.round(11 * s);
+        ctx.fillStyle = `rgba(210, 153, 34, ${0.5 * depthAlpha})`;
+        ctx.font = `${tagSize}px SF Mono, monospace`;
+        ctx.fillText('observing', x, y + scoreYOff);
+      }
     }
 
-    /* Spawn data streams to nebula occasionally */
+    /* Data streams to/from nebula */
     if (hasPrograms && Math.random() < 0.008) {
       dataStreams.push(new DataStream(x, y, cx, cy));
     }
     if (hasPrograms && Math.random() < 0.005) {
       dataStreams.push(new DataStream(cx, cy, x, y));
     }
+
+    /* Store hitbox for click detection (in zoomed canvas coords) */
+    const hitR = Math.max(dotR, 18) * zoomLevel;
+    const hx = (x - W / 2) * zoomLevel + W / 2;
+    const hy = (y - H / 2) * zoomLevel + H / 2;
+    lastAgentHitboxes.push({ name: a.name, x: hx, y: hy, r: hitR });
   });
 }
 
@@ -295,7 +691,7 @@ function render(time) {
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
 
-  /* Distant stars */
+  /* Distant stars (unzoomed) */
   if (frame === 0) {
     window._stars = [];
     for (let i = 0; i < 200; i++) {
@@ -316,6 +712,12 @@ function render(time) {
     ctx.fill();
   }
 
+  /* Apply zoom — translate to center, scale, translate back */
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(zoomLevel, zoomLevel);
+  ctx.translate(-W / 2, -H / 2);
+
   /* Nebula core */
   drawNebula(time);
 
@@ -332,6 +734,14 @@ function render(time) {
   /* Orbiting agents */
   drawOrbitingAgents(time);
 
+  ctx.restore();
+
+  /* Update focus panel live */
+  if (selectedAgentName && agents[selectedAgentName]) {
+    if (focusAnimT < 1) focusAnimT = Math.min(1, focusAnimT + 0.04);
+    if (frame % 30 === 0) updateFocusPanel();
+  }
+
   frame++;
   requestAnimationFrame(render);
 }
@@ -340,14 +750,57 @@ requestAnimationFrame(render);
 /* ═══════════════════════════════════════════
    WEBSOCKET + DATA
    ═══════════════════════════════════════════ */
+function applyRoleLayout(role) {
+  if (roleApplied) return;
+  roleApplied = true;
+  hostRole = role;
+
+  const show = (id) => document.getElementById(id)?.classList.remove('section-hidden');
+  const hide = (id) => document.getElementById(id)?.classList.add('section-hidden');
+
+  const headerEl = document.querySelector('.header h1');
+  const roleLabels = { sentient: 'Sentient', worker: 'Worker', oracle: 'Oracle' };
+  if (headerEl && roleLabels[role]) {
+    headerEl.innerHTML = `NML Collective <span class="role-header-badge ${role}">${roleLabels[role]}</span>`;
+  }
+
+  if (role === 'sentient') {
+    show('sectionNebula');
+    show('sectionWorkerResults');
+    hide('sectionDataSubmit');
+    show('sectionOracle');
+    hide('sectionRecommend');
+  } else if (role === 'worker') {
+    show('sectionWorkerResults');
+    hide('sectionNebula');
+    show('sectionDataSubmit');
+    show('sectionOracle');
+    hide('sectionRecommend');
+  } else if (role === 'oracle') {
+    hide('sectionWorkerResults');
+    hide('sectionDataSubmit');
+    hide('sectionArchitect');
+    show('sectionOracle');
+    show('sectionRecommend');
+    show('sectionNebula');
+    document.getElementById('actionBar').style.display = 'none';
+    fetchRecommendations();
+  } else if (role === 'architect') {
+    hide('sectionWorkerResults');
+    hide('sectionDataSubmit');
+    show('sectionArchitect');
+    show('sectionOracle');
+    hide('sectionRecommend');
+    hide('sectionNebula');
+    document.getElementById('actionBar').style.display = 'none';
+    fetchCatalog();
+  }
+}
+
 function connectToAgent() {
   const url = document.getElementById('seedInput').value.trim();
   if (!url) return;
   knownSeed = url;
-  document.getElementById('connectBtn').disabled = true;
-  document.getElementById('connectBtn').textContent = 'Connected';
-  document.getElementById('submitBtn').disabled = false;
-  document.getElementById('consensusBtn').disabled = false;
   connectWS(url);
 }
 
@@ -362,6 +815,11 @@ function connectWS(agentUrl) {
       if (data.state) {
         const state = data.state;
         agents[state.name] = { ...state, url: agentUrl, lastPoll: Date.now() };
+
+        if (agentUrl === knownSeed && state.role && !roleApplied) {
+          applyRoleLayout(state.role);
+        }
+
         if (state.recent_events) {
           for (const ev of state.recent_events) {
             const key = state.name + ':' + ev.time + ':' + ev.type;
@@ -383,22 +841,49 @@ function updateSidebar() {
   const agentList = Object.values(agents);
   document.getElementById('statusText').textContent = agentList.length + ' agent' + (agentList.length !== 1 ? 's' : '') + ' in collective';
 
+  /* ─── Agent Cards ─── */
   let cards = '';
   for (const a of agentList) {
     const score = a.last_result?.score;
     const scoreClass = score != null ? (score >= 0.5 ? 'high' : 'low') : '';
     const scoreText = score != null ? score.toFixed(4) : '-';
+    const isThisHost = a.url === knownSeed;
     const roleBadge = a.role ? `<span class="role-badge ${a.role}">${a.role}</span>` : '';
-    cards += `<div class="agent-card"><div class="name">${a.name}${roleBadge}</div><div class="meta">${a.peer_count} peers · ${a.programs_received} prog · ${Math.round(a.uptime_seconds)}s</div><div class="score ${scoreClass}">${scoreText}</div></div>`;
+    const youBadge = isThisHost ? '<span style="font-size:9px;color:#8b949e;margin-left:4px">(you)</span>' : '';
+    let metaExtra = '';
+    if (hostRole === 'oracle') {
+      metaExtra = ` · ${a.has_local_data ? 'has data' : 'no data'}`;
+      if (a.udp_enabled) metaExtra += ' · udp';
+      if (a.relay_connected) metaExtra += ' · relay';
+    }
+    const cardBorder = isThisHost ? 'border-color:rgba(255,255,255,0.25)' : '';
+    cards += `<div class="agent-card" style="${cardBorder}"><div class="name">${a.name}${roleBadge}${youBadge}</div><div class="meta">${a.peer_count} peers · ${a.programs_received} prog · ${Math.round(a.uptime_seconds)}s${metaExtra}</div><div class="score ${scoreClass}">${scoreText}</div></div>`;
   }
   document.getElementById('agentCards').innerHTML = cards || '<div style="color:#484f58;font-size:11px;padding:20px 0;text-align:center">No agents</div>';
 
-  /* Nebula stats from sentient agents */
+  /* ─── Worker: My Results ─── */
+  if (hostRole === 'worker' || hostRole === 'sentient') {
+    const hostAgent = agentList.find(a => a.url === knownSeed);
+    if (hostAgent && hostAgent.last_result) {
+      const r = hostAgent.last_result;
+      const score = r.score;
+      const scoreColor = score != null ? (score >= 0.5 ? '#f85149' : '#3fb950') : '#8b949e';
+      document.getElementById('workerResults').innerHTML = `
+        <div class="worker-results">
+          <div class="wr-label">Latest Execution</div>
+          <div class="wr-score" style="color:${scoreColor}">${score != null ? score.toFixed(4) : 'no score'}</div>
+          <div class="wr-hash">hash: ${r.hash || '?'} · exit: ${r.exit_code ?? '?'} · ${r.success ? 'success' : 'failed'}</div>
+        </div>
+      `;
+    }
+  }
+
+  /* ─── Nebula stats ─── */
   const sentient = agentList.find(a => a.nebula_stats);
   if (sentient && sentient.nebula_stats) {
     const ns = sentient.nebula_stats;
     window._nebulaActive = ns.quarantine_pending > 0;
-    document.getElementById('nebulaStats').innerHTML = `
+    let nebulaHTML = `
       <div class="nebula-stat"><span>Programs</span><span class="val">${ns.programs}</span></div>
       <div class="nebula-stat"><span>Data approved</span><span class="val">${ns.data_approved}</span></div>
       <div class="nebula-stat"><span>Data rejected</span><span class="val">${ns.data_rejected}</span></div>
@@ -406,13 +891,71 @@ function updateSidebar() {
       <div class="nebula-stat"><span>Executions</span><span class="val">${ns.executions}</span></div>
       <div class="nebula-stat"><span>Ledger entries</span><span class="val">${ns.ledger_entries}</span></div>
     `;
+    document.getElementById('nebulaStats').innerHTML = nebulaHTML;
+
+    if (hostRole === 'sentient' && ns.quarantine_pending > 0) {
+      fetchQuarantine(sentient.url || knownSeed);
+    }
   } else {
     window._nebulaActive = false;
   }
 
+  /* ─── Oracle section — only update stats, never touch input/answer ─── */
+  const oracleAgent = agentList.find(a => a.role === 'oracle');
+  const isHostOracle = hostRole === 'oracle';
+  const oracleUrl = isHostOracle ? knownSeed : (oracleAgent ? oracleAgent.url : null);
+  window._oracleUrl = oracleUrl;
+
+  if (isHostOracle) {
+    const hostAgent = agentList.find(a => a.url === knownSeed);
+    const os = hostAgent?.oracle_stats || {};
+    document.getElementById('oracleStats').innerHTML = `
+      <div class="oracle-stat"><span>Agents tracked</span><span class="val">${os.collective_size || 0}</span></div>
+      <div class="oracle-stat"><span>Events tracked</span><span class="val">${os.events_tracked || 0}</span></div>
+      <div class="oracle-stat"><span>Programs known</span><span class="val">${os.programs_known || 0}</span></div>
+      <div class="oracle-stat"><span>LLM</span><span class="val">${os.llm_connected ? 'connected' : 'none'}</span></div>
+      <div class="oracle-stat"><span>Poll cycles</span><span class="val">${os.poll_count || 0}</span></div>
+    `;
+    document.getElementById('oracleInteractive').style.display = '';
+    document.getElementById('oracleInput').placeholder = 'Ask me anything about the collective...';
+  } else if (oracleAgent && oracleAgent.oracle_stats) {
+    const os = oracleAgent.oracle_stats;
+    document.getElementById('oracleStats').innerHTML = `
+      <div class="oracle-stat"><span>Agents tracked</span><span class="val">${os.collective_size}</span></div>
+      <div class="oracle-stat"><span>Events tracked</span><span class="val">${os.events_tracked}</span></div>
+      <div class="oracle-stat"><span>LLM</span><span class="val">${os.llm_connected ? 'connected' : 'none'}</span></div>
+    `;
+    document.getElementById('oracleInteractive').style.display = '';
+    document.getElementById('oracleInput').placeholder = 'Ask the Oracle...';
+  } else {
+    document.getElementById('oracleStats').innerHTML = '<div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No oracle in collective</div>';
+    document.getElementById('oracleInteractive').style.display = 'none';
+  }
+
+  /* ─── Architect section ─── */
+  const architectAgent = agentList.find(a => a.role === 'architect');
+  if (architectAgent && architectAgent.architect_stats) {
+    const as = architectAgent.architect_stats;
+    document.getElementById('architectStats').innerHTML = `
+      <div class="architect-stat"><span>Programs built</span><span class="val">${as.programs_built}</span></div>
+      <div class="architect-stat"><span>Catalog size</span><span class="val">${as.catalog_size}</span></div>
+      <div class="architect-stat"><span>LLM</span><span class="val">${as.llm_connected ? 'connected' : 'none'}</span></div>
+    `;
+  }
+
+  /* ─── Event Feed ─── */
   allEvents.sort((a, b) => b.time - a.time);
+  let filteredEvents = allEvents;
+  if (hostRole === 'worker') {
+    filteredEvents = allEvents.filter(e =>
+      e.type.includes('program') || e.type.includes('executed') ||
+      e.type.includes('peer') || e.type.includes('data') ||
+      e.type.includes('udp') || e.type.includes('consensus')
+    );
+  }
+  const eventLimit = hostRole === 'oracle' ? 60 : 30;
   let feed = '';
-  for (const e of allEvents.slice(0, 40)) {
+  for (const e of filteredEvents.slice(0, eventLimit)) {
     feed += `<div class="event-item"><span class="time">${e.time.toFixed(1)}s</span><span class="type ${e.type}">${e.type}</span><span class="detail">[${e.agent}] ${e.detail}</span></div>`;
   }
   document.getElementById('eventFeed').innerHTML = feed || '<div style="color:#484f58;font-size:11px;padding:20px 0;text-align:center">No events</div>';
@@ -424,15 +967,231 @@ async function submitProgram() {
   try { await fetch(knownSeed + '/submit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ program }) }); } catch (e) {}
 }
 
+async function askOracle() {
+  const url = window._oracleUrl;
+  if (!url) return;
+  const input = document.getElementById('oracleInput');
+  const question = input.value.trim();
+  if (!question) return;
+  input.value = '';
+  document.getElementById('oracleAnswer').innerHTML = '<div class="oracle-answer"><div class="llm-tag">thinking...</div></div>';
+  try {
+    const resp = await fetch(url + '/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
+    const data = await resp.json();
+    const tag = data.llm ? 'LLM reasoning' : 'structured data';
+    document.getElementById('oracleAnswer').innerHTML = `<div class="oracle-answer"><div class="llm-tag">${tag}</div>${data.answer || data.error}</div>`;
+  } catch (e) {
+    document.getElementById('oracleAnswer').innerHTML = `<div class="oracle-answer"><div class="llm-tag">error</div>${e.message}</div>`;
+  }
+}
+
+/* ─── Sentient: Quarantine Management ─── */
+async function fetchQuarantine(sentientUrl) {
+  try {
+    const resp = await fetch(sentientUrl + '/data/quarantine');
+    const data = await resp.json();
+    const pending = data.pending || [];
+    if (pending.length === 0) {
+      document.getElementById('quarantineList').innerHTML = '';
+      return;
+    }
+    let html = '';
+    for (const item of pending) {
+      const ctx = item.meta?.context;
+      const ctxLine = ctx ? `<div style="color:#58a6ff;font-size:9px;margin-top:2px">${ctx.domain || ''} ${(ctx.tags || []).map(t => '#' + t).join(' ')}</div>` : '';
+      const descLine = ctx?.description ? `<div style="color:#8b949e;font-size:9px;margin-top:1px">${ctx.description}</div>` : '';
+
+      let votesHTML = '';
+      for (const v of (item.votes || [])) {
+        const vc = v.vote === 'approve' ? '#3fb950' : '#f85149';
+        const roleTag = v.role === 'oracle' ? ' (oracle)' : '';
+        votesHTML += `<div style="font-size:9px;color:${vc};margin-top:2px">${v.vote}${roleTag}: ${v.reason || v.voter}</div>`;
+        if (v.analysis) {
+          const a = v.analysis;
+          votesHTML += `<div style="font-size:9px;color:#6e7681;margin-left:8px">score=${a.score} · ${a.checks?.filter(c => !c.passed).map(c => c.detail || c.name).join(', ') || 'all checks passed'}</div>`;
+        }
+      }
+
+      html += `<div class="quarantine-item">
+        <span class="q-name">@${item.meta?.name || '?'}</span>
+        <span class="q-meta"> · ${item.author} · ${item.content_size}B</span>
+        ${ctxLine}${descLine}${votesHTML}
+        <div style="margin-top:4px">
+          <button class="q-approve" onclick="quarantineAction('${sentientUrl}','${item.hash}','approve')">Approve</button>
+          <button class="q-reject" onclick="quarantineAction('${sentientUrl}','${item.hash}','reject')">Reject</button>
+        </div>
+      </div>`;
+    }
+    document.getElementById('quarantineList').innerHTML = html;
+  } catch (e) {}
+}
+
+async function quarantineAction(sentientUrl, hash, action) {
+  try {
+    await fetch(sentientUrl + '/data/' + action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hash, reason: 'dashboard ' + action }),
+    });
+  } catch (e) {}
+}
+
+/* ─── Worker: Data Submission ─── */
+async function submitData() {
+  if (!knownSeed) return;
+  const name = document.getElementById('dataName').value.trim();
+  const content = document.getElementById('dataContent').value.trim();
+  if (!name || !content) return;
+
+  const desc = document.getElementById('dataDescription').value.trim();
+  const domain = document.getElementById('dataDomain').value.trim();
+  const tags = document.getElementById('dataTags').value.trim().split(',').map(t => t.trim()).filter(Boolean);
+  const features = document.getElementById('dataFeatures').value.trim().split(',').map(f => f.trim()).filter(Boolean);
+
+  const context = {};
+  if (desc) context.description = desc;
+  if (domain) context.domain = domain;
+  if (tags.length) context.tags = tags;
+  if (features.length) context.features = features;
+  context.source = 'dashboard';
+
+  const payload = { name, content };
+  if (Object.keys(context).length > 1) payload.context = context;
+
+  const sentientUrl = findSentientUrl() || knownSeed;
+  try {
+    const resp = await fetch(sentientUrl + '/data/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    const statusColor = data.status === 'approved' ? '#3fb950' : (data.status === 'rejected' ? '#f85149' : '#d29922');
+    let resultHTML = `<div style="margin-top:4px;font-size:10px;color:${statusColor}">hash: ${data.hash} · status: ${data.status}</div>`;
+    if (data.oracle_vote) {
+      const ov = data.oracle_vote;
+      const voteColor = ov.vote === 'approve' ? '#3fb950' : (ov.vote === 'reject' ? '#f85149' : '#d29922');
+      resultHTML += `<div style="margin-top:2px;font-size:10px;color:${voteColor}">Oracle vote: ${ov.vote} (score: ${ov.analysis?.score})</div>`;
+    }
+    document.getElementById('dataSubmitResult').innerHTML = resultHTML;
+    document.getElementById('dataName').value = '';
+    document.getElementById('dataContent').value = '';
+    document.getElementById('dataDescription').value = '';
+    document.getElementById('dataDomain').value = '';
+    document.getElementById('dataTags').value = '';
+    document.getElementById('dataFeatures').value = '';
+  } catch (e) {
+    document.getElementById('dataSubmitResult').innerHTML =
+      `<div style="margin-top:4px;font-size:10px;color:#f85149">Error: ${e.message}</div>`;
+  }
+}
+
+function findSentientUrl() {
+  for (const a of Object.values(agents)) {
+    if (a.role === 'sentient') return a.url;
+  }
+  return null;
+}
+
+/* ─── Oracle: Recommendations ─── */
+async function fetchRecommendations() {
+  if (!knownSeed) return;
+  try {
+    const resp = await fetch(knownSeed + '/recommend');
+    const data = await resp.json();
+    const recs = data.recommendations || [];
+    if (recs.length === 0) {
+      document.getElementById('oracleRecommendations').innerHTML =
+        '<div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No recommendations yet</div>';
+      return;
+    }
+    let html = '';
+    for (const r of recs) {
+      html += `<div class="oracle-recommend">
+        <span class="rec-severity ${r.severity}">${r.severity}</span>
+        <span class="rec-category">${r.category}</span>
+        <div style="margin-top:3px;color:#c9d1d9">${r.message}</div>
+      </div>`;
+    }
+    document.getElementById('oracleRecommendations').innerHTML = html;
+  } catch (e) {
+    document.getElementById('oracleRecommendations').innerHTML =
+      `<div style="color:#f85149;font-size:10px;padding:10px 0">Error fetching recommendations</div>`;
+  }
+}
+
+/* ─── Architect: Catalog ─── */
+async function fetchCatalog() {
+  if (!knownSeed) return;
+  try {
+    const resp = await fetch(knownSeed + '/catalog');
+    const data = await resp.json();
+    const catalog = data.catalog || [];
+    if (catalog.length === 0) {
+      document.getElementById('architectCatalog').innerHTML =
+        '<div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No programs built yet</div>';
+      return;
+    }
+    let html = '';
+    for (const item of catalog) {
+      const statusClass = item.status === 'valid' ? 'cat-valid' : 'cat-invalid';
+      html += `<div class="catalog-item">
+        <span class="cat-hash">${item.hash}</span>
+        <span class="${statusClass}"> · ${item.status}</span>
+        <span class="cat-meta"> · ${item.byte_size}B${item.fits_udp ? '' : ' (too large for UDP)'}</span>
+        <div class="cat-meta" style="margin-top:2px">${item.intent || ''}</div>
+      </div>`;
+    }
+    document.getElementById('architectCatalog').innerHTML = html;
+  } catch (e) {}
+}
+
 async function requestConsensus() {
   if (!knownSeed) return;
   try {
     const resp = await fetch(knownSeed + '/consensus', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ strategy: 'median' }) });
     const data = await resp.json();
     if (data.consensus != null) {
-      document.getElementById('consensusBar').style.display = 'block';
+      const bar = document.getElementById('consensusBar');
+      bar.style.display = 'block';
       document.getElementById('consensusValue').textContent = data.consensus.toFixed(4);
-      document.getElementById('consensusStrategy').textContent = `${data.strategy} · ${data.count} agents`;
+
+      let meta = `${data.strategy} · ${data.count} agents`;
+      if (data.weighted) meta += ' · weighted';
+      document.getElementById('consensusStrategy').textContent = meta;
+
+      let extra = '';
+
+      if (data.raw_consensus != null && data.weighted) {
+        extra += `<div class="raw-value">raw: ${data.raw_consensus.toFixed(4)}</div>`;
+      }
+
+      if (data.assessment) {
+        const a = data.assessment;
+        extra += `<span class="confidence-badge ${a.confidence}">${a.confidence} confidence</span>`;
+        extra += `<div class="consensus-assessment">${a.confidence_reason}</div>`;
+        if (a.outliers && a.outliers.length > 0) {
+          for (const o of a.outliers) {
+            extra += `<div class="consensus-outlier">outlier: ${o.agent} = ${o.score} (z=${o.z_score}, ${o.direction})</div>`;
+          }
+        }
+        if (a.recommendation) {
+          extra += `<div class="consensus-assessment" style="color:#d29922">${a.recommendation}</div>`;
+        }
+      }
+
+      if (data.weights) {
+        const wList = Object.entries(data.weights).map(([n, w]) => `${n}=${w}`).join(', ');
+        extra += `<div class="consensus-weights">weights: ${wList}</div>`;
+      }
+
+      let existingExtra = bar.querySelector('.consensus-extra');
+      if (!existingExtra) {
+        existingExtra = document.createElement('div');
+        existingExtra.className = 'consensus-extra';
+        bar.appendChild(existingExtra);
+      }
+      existingExtra.innerHTML = extra;
     }
   } catch (e) {}
 }

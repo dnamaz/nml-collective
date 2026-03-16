@@ -490,6 +490,18 @@ class CollectiveAgent:
                 lambda t, d: self.log_event(f"nebula_{t}", d)
             )
 
+        # Oracles embed a knowledge engine with LLM connector
+        self.oracle = None
+        if role == "oracle":
+            from nml_oracle import OracleEngine
+            self.oracle = OracleEngine(self, llm_url=llm_url)
+
+        # Architects embed a program builder with NML LLM connector
+        self.architect = None
+        if role == "architect":
+            from nml_architect import ArchitectEngine
+            self.architect = ArchitectEngine(self, llm_url=llm_url)
+
     def log_event(self, event_type, detail=""):
         entry = {
             "time": round(time.time() - self.start_time, 1),
@@ -534,11 +546,12 @@ class CollectiveAgent:
             await session.post(f"{peer_url}/peer/join", json={
                 "name": self.name,
                 "url": self.my_url,
+                "role": self.role,
             }, timeout=3)
         except Exception:
             pass
 
-    def _add_peer(self, name, url):
+    def _add_peer(self, name, url, role=None):
         if name == self.name or url == self.my_url:
             return
         is_new = name not in self.peers
@@ -546,7 +559,10 @@ class CollectiveAgent:
             "url": url,
             "last_seen": time.time(),
             "misses": 0,
+            "role": role or self.peers.get(name, {}).get("role"),
         }
+        if role == "oracle":
+            self._oracle_peer_cache = url
         if is_new:
             self.log_event("peer_discovered", f"{name} at {url}")
 
@@ -583,6 +599,12 @@ class CollectiveAgent:
         self.seen_programs[phash] = program
         self.log_event("program_received", f"hash={phash} from={source_name or 'local'}")
 
+        # Oracle and Architect observe programs but never execute them
+        if self.role in ("oracle", "architect"):
+            self.log_event(f"{self.role}_observed", f"hash={phash} (no execution)")
+            self._forward_program(program, phash, source_name)
+            return
+
         result = await execute_nml(program, self.local_data)
         self.results[phash] = {
             "agent": self.name,
@@ -613,6 +635,10 @@ class CollectiveAgent:
         if self.udp and score is not None:
             self.udp.broadcast_result(phash, score)
 
+        self._forward_program(program, phash, source_name)
+
+    def _forward_program(self, program, phash, source_name):
+        """Forward a program to peers via UDP, relay, and HTTP fallback."""
         # Forward via relay (WAN)
         if self.relay and source_name != "relay":
             self.relay.send_program(program)
@@ -624,17 +650,20 @@ class CollectiveAgent:
 
         # HTTP fallback for peers not on the multicast group
         if not udp_sent:
-            async with ClientSession() as session:
-                for name, info in list(self.peers.items()):
-                    if name == source_name:
-                        continue
-                    try:
-                        await session.post(f"{info['url']}/broadcast", json={
-                            "program": program,
-                            "source": self.name,
-                        }, timeout=5)
-                    except Exception:
-                        pass
+            asyncio.ensure_future(self._http_forward(program, source_name))
+
+    async def _http_forward(self, program, source_name):
+        async with ClientSession() as session:
+            for name, info in list(self.peers.items()):
+                if name == source_name:
+                    continue
+                try:
+                    await session.post(f"{info['url']}/broadcast", json={
+                        "program": program,
+                        "source": self.name,
+                    }, timeout=5)
+                except Exception:
+                    pass
 
     async def generate_from_llm(self, prompt: str) -> str:
         if not self.llm_url:
@@ -659,6 +688,9 @@ class CollectiveAgent:
                 return None
 
     async def collect_consensus(self, phash: str, strategy: str = "median") -> dict:
+        """Two-phase VOTE: collect raw scores, then apply weights + oracle assessment."""
+
+        # Phase 1: Collect raw scores from all executing agents
         all_scores = []
 
         if phash in self.results and "score" in self.results[phash]:
@@ -684,25 +716,69 @@ class CollectiveAgent:
             return {"error": "No scores available", "strategy": strategy}
 
         scores = [s["score"] for s in all_scores]
+        raw_sorted = sorted(scores)
+        mid = len(raw_sorted) // 2
         if strategy == "median":
-            scores.sort()
-            mid = len(scores) // 2
-            consensus = scores[mid] if len(scores) % 2 == 1 else (scores[mid-1] + scores[mid]) / 2
+            raw_consensus = raw_sorted[mid] if len(raw_sorted) % 2 == 1 else (raw_sorted[mid-1] + raw_sorted[mid]) / 2
         elif strategy == "mean":
-            consensus = sum(scores) / len(scores)
+            raw_consensus = sum(scores) / len(scores)
         elif strategy == "min":
-            consensus = min(scores)
+            raw_consensus = min(scores)
         elif strategy == "max":
-            consensus = max(scores)
+            raw_consensus = max(scores)
         else:
-            consensus = sum(scores) / len(scores)
+            raw_consensus = sum(scores) / len(scores)
 
-        return {
+        result = {
             "strategy": strategy,
             "agents": all_scores,
-            "consensus": consensus,
+            "raw_consensus": raw_consensus,
+            "consensus": raw_consensus,
+            "weighted": False,
             "count": len(all_scores),
         }
+
+        # Phase 2: Oracle assessment + sentient weights (if oracle is in the mesh)
+        oracle = self._find_oracle()
+        if oracle:
+            assessment = oracle.assess_consensus(all_scores)
+            result["assessment"] = assessment
+
+            weights = oracle.compute_sentient_weights(all_scores)
+            if weights:
+                weighted_scores = []
+                weighted_agents = []
+                for s in all_scores:
+                    w = weights.get(s["agent"], 1.0)
+                    weighted_agents.append({**s, "weight": round(w, 3)})
+                    weighted_scores.extend([s["score"]] * max(1, round(w * 10)))
+
+                if weighted_scores:
+                    ws = sorted(weighted_scores)
+                    wmid = len(ws) // 2
+                    if strategy == "median":
+                        weighted_consensus = ws[wmid] if len(ws) % 2 == 1 else (ws[wmid-1] + ws[wmid]) / 2
+                    elif strategy == "mean":
+                        weighted_consensus = sum(ws) / len(ws)
+                    elif strategy == "min":
+                        weighted_consensus = min(ws)
+                    elif strategy == "max":
+                        weighted_consensus = max(ws)
+                    else:
+                        weighted_consensus = sum(ws) / len(ws)
+
+                    result["consensus"] = weighted_consensus
+                    result["weighted"] = True
+                    result["agents"] = weighted_agents
+                    result["weights"] = weights
+
+        return result
+
+    def _find_oracle(self):
+        """Find the local oracle engine (if this agent is oracle) or None."""
+        if self.oracle:
+            return self.oracle
+        return None
 
     def get_state(self):
         last_result = None
@@ -730,6 +806,18 @@ class CollectiveAgent:
             "mdns_service": MDNS_SERVICE_TYPE if self.mdns else None,
             "role": self.role,
             "nebula_stats": self.nebula.stats() if self.nebula else None,
+            "architect_stats": {
+                "programs_built": self.architect.build_count,
+                "catalog_size": len(self.architect.catalog),
+                "llm_connected": self.architect.llm_url is not None,
+            } if self.architect else None,
+            "oracle_stats": {
+                "collective_size": len(self.oracle.collective_state),
+                "events_tracked": len(self.oracle.event_timeline),
+                "programs_known": len(self.oracle.programs_catalog),
+                "llm_connected": self.oracle.llm_url is not None,
+                "poll_count": self.oracle._poll_count,
+            } if self.oracle else None,
             "relay_url": self.relay_url,
             "relay_connected": self.relay is not None and self.relay.ws is not None and not self.relay.ws.closed if self.relay else False,
             "recent_events": self.event_log[-20:],
@@ -772,7 +860,7 @@ def create_collective_app(agent: CollectiveAgent):
         url = body.get("url")
         if not name or not url:
             return _json({"error": "name and url required"}, 400)
-        agent._add_peer(name, url)
+        agent._add_peer(name, url, role=body.get("role"))
         return _json({"status": "welcomed", "collective_size": len(agent.peers) + 1})
 
     async def handle_heartbeat(request):
@@ -814,7 +902,7 @@ def create_collective_app(agent: CollectiveAgent):
 
         if agent.signing_key:
             signed = subprocess.run(
-                [str(NML_CRYPTO), "--sign", "/dev/stdin", "--key", agent.signing_key, "--agent", agent.name],
+                [str(NML_BINARY), "--sign", "/dev/stdin", "--key", agent.signing_key, "--agent", agent.name],
                 input=code, capture_output=True, text=True,
             )
             if signed.returncode == 0:
@@ -838,11 +926,37 @@ def create_collective_app(agent: CollectiveAgent):
         if not phash:
             if agent.results:
                 phash = list(agent.results.keys())[-1]
+            elif agent.seen_programs:
+                phash = list(agent.seen_programs.keys())[-1]
             else:
-                return _json({"error": "No programs executed yet"}, 400)
+                return _json({"error": "No programs seen yet"}, 400)
 
         result = await agent.collect_consensus(phash, strategy)
+
+        # If this agent doesn't have an oracle, try fetching assessment from oracle peer
+        if "assessment" not in result and not agent.oracle:
+            oracle_url = _find_oracle_peer()
+            if oracle_url:
+                try:
+                    async with ClientSession() as session:
+                        async with session.post(
+                            f"{oracle_url}/assess",
+                            json={"scores": result.get("agents", [])},
+                            timeout=5,
+                        ) as resp:
+                            oracle_data = await resp.json()
+                            if "assessment" in oracle_data:
+                                result["assessment"] = oracle_data["assessment"]
+                                if oracle_data.get("weights"):
+                                    result["weights"] = oracle_data["weights"]
+                except Exception:
+                    pass
+
         return _json(result)
+
+    def _find_oracle_peer():
+        """Find an oracle peer's URL from cached peer roles."""
+        return getattr(agent, '_oracle_peer_cache', None)
 
     async def handle_state(request):
         return _json(agent.get_state())
@@ -867,43 +981,61 @@ def create_collective_app(agent: CollectiveAgent):
     # ═══════════════════════════════════════════
 
     async def handle_data_submit(request):
-        """Worker submits data to the nebula's quarantine."""
+        """Submit data to the nebula's quarantine. Accepts optional context metadata."""
         body = await request.json()
         name = body.get("name", "")
         content = body.get("content", "")
         if not name or not content:
             return _json({"error": "name and content required"}, 400)
 
+        context = body.get("context")
+        submitter = body.get("author", agent.name)
+
         nebula = _get_nebula()
         if not nebula:
             return _json({"error": "No nebula available. Connect to a sentient or --nebula URL"}, 503)
 
-        entry = nebula.submit_data(name, content, author=agent.name)
-        return _json({"hash": entry.hash, "status": entry.status,
-                       "auto_checks": entry.meta.get("auto_checks")})
+        entry = nebula.submit_data(name, content, author=submitter, context=context)
+
+        result = {"hash": entry.hash, "status": entry.status,
+                  "auto_checks": entry.meta.get("auto_checks")}
+
+        # Oracle auto-analyzes and votes on new quarantine entries
+        if agent.oracle and entry.status == "pending":
+            vote_result = agent.oracle.vote_on_data(
+                nebula, entry.hash, name, content,
+                context=context, author=submitter,
+            )
+            result["oracle_vote"] = vote_result
+            # Re-read status in case oracle vote triggered promotion or rejection
+            result["status"] = entry.status
+
+        return _json(result)
 
     async def handle_data_approve(request):
-        """Sentient approves quarantined data."""
-        if agent.role != "sentient":
-            return _json({"error": "Only sentients can approve data"}, 403)
+        """Sentient or oracle approves quarantined data."""
+        if agent.role not in ("sentient", "oracle"):
+            return _json({"error": "Only sentients and oracles can approve data"}, 403)
         body = await request.json()
         nebula = _get_nebula()
         if not nebula:
             return _json({"error": "No nebula"}, 503)
-        entry = nebula.approve(body.get("hash", ""), agent.name, body.get("reason", ""))
+        entry = nebula.approve(body.get("hash", ""), agent.name,
+                               body.get("reason", ""), role=agent.role)
         if entry:
             return _json({"hash": entry.hash, "status": entry.status, "votes": entry.votes})
         return _json({"error": "Not found or not pending"}, 404)
 
     async def handle_data_reject(request):
-        """Sentient rejects quarantined data."""
-        if agent.role != "sentient":
-            return _json({"error": "Only sentients can reject data"}, 403)
+        """Sentient or oracle rejects quarantined data."""
+        if agent.role not in ("sentient", "oracle"):
+            return _json({"error": "Only sentients and oracles can reject data"}, 403)
         body = await request.json()
         nebula = _get_nebula()
         if not nebula:
             return _json({"error": "No nebula"}, 503)
-        entry = nebula.reject(body.get("hash", ""), agent.name, body.get("reason", ""))
+        entry = nebula.reject(body.get("hash", ""), agent.name,
+                              body.get("reason", ""), role=agent.role)
         if entry:
             return _json({"hash": entry.hash, "status": entry.status, "reason": entry.reason})
         return _json({"error": "Not found or not pending"}, 404)
@@ -932,6 +1064,97 @@ def create_collective_app(agent: CollectiveAgent):
             return agent.nebula
         return None
 
+    # ═══════════════════════════════════════════
+    # Oracle endpoints (role-aware)
+    # ═══════════════════════════════════════════
+
+    async def handle_ask(request):
+        """Ask the Oracle a question about the collective."""
+        if not agent.oracle:
+            return _json({"error": "This agent is not an Oracle. Connect to an oracle agent."}, 403)
+        body = await request.json()
+        question = body.get("question", "")
+        if not question:
+            return _json({"error": "question required"}, 400)
+        result = await agent.oracle.ask(question)
+        return _json(result)
+
+    async def handle_context(request):
+        """Get the Oracle's full collective awareness."""
+        if not agent.oracle:
+            return _json({"error": "This agent is not an Oracle"}, 403)
+        return _json(agent.oracle.get_collective_context())
+
+    async def handle_explain(request):
+        """Ask the Oracle to explain a program, data batch, or consensus result."""
+        if not agent.oracle:
+            return _json({"error": "This agent is not an Oracle"}, 403)
+        hash_hex = request.query.get("hash", "")
+        if not hash_hex:
+            return _json({"error": "hash query parameter required"}, 400)
+        result = await agent.oracle.explain(hash_hex)
+        return _json(result)
+
+    async def handle_recommend(request):
+        """Ask the Oracle for recommendations about the collective."""
+        if not agent.oracle:
+            return _json({"error": "This agent is not an Oracle"}, 403)
+        result = await agent.oracle.recommend()
+        return _json(result)
+
+    async def handle_spec(request):
+        """Oracle generates a program specification for the Architect."""
+        if not agent.oracle:
+            return _json({"error": "This agent is not an Oracle"}, 403)
+        body = await request.json() if request.content_length else {}
+        intent = body.get("intent")
+        spec = agent.oracle.generate_program_spec(intent=intent)
+        return _json(spec)
+
+    # ═══════════════════════════════════════════
+    # Architect endpoints (role-aware)
+    # ═══════════════════════════════════════════
+
+    async def handle_build(request):
+        """Architect builds an NML program from a spec."""
+        if not agent.architect:
+            return _json({"error": "This agent is not an Architect"}, 403)
+        body = await request.json()
+        if not body.get("intent") and not body.get("spec"):
+            return _json({"error": "intent or spec required"}, 400)
+        spec = body.get("spec", body)
+        result = await agent.architect.build(spec)
+        return _json(result)
+
+    async def handle_validate(request):
+        """Architect validates an NML program."""
+        if not agent.architect:
+            return _json({"error": "This agent is not an Architect"}, 403)
+        body = await request.json()
+        program = body.get("program", "")
+        if not program:
+            return _json({"error": "program required"}, 400)
+        result = await agent.architect.validate_program(program)
+        return _json(result)
+
+    async def handle_catalog(request):
+        """List all programs the architect has built."""
+        if not agent.architect:
+            return _json({"error": "This agent is not an Architect"}, 403)
+        return _json({"catalog": agent.architect.get_catalog()})
+
+    async def handle_assess(request):
+        """Oracle assesses a set of consensus scores (called by other agents)."""
+        if not agent.oracle:
+            return _json({"error": "This agent is not an Oracle"}, 403)
+        body = await request.json()
+        scores = body.get("scores", [])
+        if not scores:
+            return _json({"error": "scores array required"}, 400)
+        assessment = agent.oracle.assess_consensus(scores)
+        weights = agent.oracle.compute_sentient_weights(scores)
+        return _json({"assessment": assessment, "weights": weights})
+
     async def handle_discover(request):
         """Discovery endpoint for the dashboard — returns all known agent URLs."""
         all_agents = [{"name": agent.name, "url": agent.my_url}]
@@ -948,8 +1171,7 @@ def create_collective_app(agent: CollectiveAgent):
             window.addEventListener('load', function() {{
                 document.getElementById('seedInput').value = "{agent.my_url}";
                 connectToAgent();
-            }});
-            </script></body>"""
+            }});</script></body>"""
             html = html.replace("</body>", inject)
             return web.Response(text=html, content_type="text/html", headers=_cors())
         return web.Response(text="Dashboard not found", status=404)
@@ -975,6 +1197,12 @@ def create_collective_app(agent: CollectiveAgent):
             agent.relay = RelayTransport(agent, agent.relay_url)
             await agent.relay.start()
 
+        if agent.oracle:
+            await agent.oracle.start()
+
+        if agent.architect:
+            await agent.architect.start()
+
     app = web.Application()
     app.on_startup.append(on_startup)
 
@@ -997,6 +1225,16 @@ def create_collective_app(agent: CollectiveAgent):
     app.router.add_get("/data/quarantine", handle_quarantine)
     app.router.add_get("/data/pool", handle_data_pool)
     app.router.add_get("/nebula/stats", handle_nebula_stats)
+    app.router.add_post("/ask", handle_ask)
+    app.router.add_get("/context", handle_context)
+    app.router.add_get("/explain", handle_explain)
+    app.router.add_get("/recommend", handle_recommend)
+    app.router.add_post("/spec", handle_spec)
+    app.router.add_post("/build", handle_build)
+    app.router.add_post("/validate", handle_validate)
+    app.router.add_get("/catalog", handle_catalog)
+    app.router.add_post("/assess", handle_assess)
+    app.router.add_get("/favicon.ico", lambda r: web.Response(status=204))
     app.router.add_route("OPTIONS", "/{path:.*}", handle_options)
 
     return app
@@ -1013,7 +1251,7 @@ def main():
     parser.add_argument("--no-udp", action="store_true", help="Disable UDP multicast")
     parser.add_argument("--no-mdns", action="store_true", help="Disable mDNS/Bonjour discovery")
     parser.add_argument("--relay", default=None, help="WebSocket relay URL (e.g. ws://relay:7777/ws)")
-    parser.add_argument("--role", choices=["sentient", "worker"], default="worker", help="Agent role")
+    parser.add_argument("--role", choices=["sentient", "worker", "oracle", "architect"], default="worker", help="Agent role")
     parser.add_argument("--nebula", default=None, help="Remote nebula URL (workers connect to sentient's nebula)")
     args = parser.parse_args()
 
@@ -1033,7 +1271,7 @@ def main():
         nebula_url=args.nebula,
     )
 
-    role_label = "SENTIENT" if args.role == "sentient" else "WORKER"
+    role_label = {"sentient": "SENTIENT", "worker": "WORKER", "oracle": "ORACLE", "architect": "ARCHITECT"}[args.role]
     print(f"NML Collective {role_label} '{args.name}' on :{args.port}")
     print(f"  Discovery: ", end="")
     modes = []
@@ -1067,6 +1305,10 @@ def main():
             agent.udp.stop()
         if agent.relay:
             agent.relay.stop()
+        if agent.oracle:
+            agent.oracle.stop()
+        if agent.architect:
+            agent.architect.stop()
 
     atexit.register(cleanup)
     for sig in (signal.SIGTERM, signal.SIGINT):
