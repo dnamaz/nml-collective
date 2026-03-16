@@ -1,49 +1,50 @@
 # NML Collective — Autonomous Agent Mesh
 
-A decentralized agent collective for [NML](https://github.com/dnamaz/nml) programs. Agents self-discover, broadcast signed programs via UDP multicast, train locally, and reach consensus — no central orchestrator.
+A decentralized agent collective for [NML](https://github.com/dnamaz/nml) programs. Specialized agents self-discover, broadcast signed programs via UDP multicast, train locally, and reach consensus — no central orchestrator.
 
 ## What It Does
 
-- **Zero-config discovery**: agents find each other via UDP multicast, mDNS/Bonjour, or WebSocket relay
-- **Signed program distribution**: Ed25519-signed NML programs broadcast in a single UDP packet (340 bytes)
-- **Local training**: each agent runs TNET on its own data, adapting the model locally
-- **VOTE consensus**: agents collect scores and compute median/mean/min/max across the fleet
-- **Real-time dashboard**: every agent serves a web UI at `/dashboard` showing the mesh topology
-- **WAN relay**: WebSocket relay server for agents across networks
+- **Four agent roles**: Sentient (authority), Worker (compute), Oracle (knowledge), Architect (builder)
+- **Zero-config discovery**: UDP multicast, mDNS/Bonjour, WebSocket relay, HTTP seeds
+- **Signed program distribution**: Ed25519-signed NML programs in a single UDP packet (340 bytes symbolic)
+- **Local training**: each worker runs TNET on its own data, producing diverse perspectives
+- **Two-phase VOTE consensus**: raw scores + Oracle assessment (outlier detection, confidence, weights)
+- **Data quarantine**: multi-role voting with Oracle analysis before data enters the pool
+- **Program pipeline**: Oracle specs → Architect builds symbolic NML → Sentient signs → Workers execute
+- **Real-time dashboard**: role-specific UI with 3D visualization, click-to-focus, zoom
 
 ## Quick Start
 
 Requires [NML](https://github.com/dnamaz/nml) runtime built with crypto support:
 
 ```bash
-# In the NML repo
 cd ../nml && make nml-crypto
 ```
 
-Start a collective (zero config — agents discover each other automatically):
+Start a minimal collective:
 
 ```bash
-# Terminal 1
-python3 serve/nml_collective.py --name alpha --port 9001 --data demos/agent1.nml.data
+# Sentient (signs programs, manages data)
+python3 serve/nml_collective.py --name prime --port 9001 --role sentient --data demos/agent1.nml.data
 
-# Terminal 2
-python3 serve/nml_collective.py --name bravo --port 9002 --data demos/agent2.nml.data
+# Workers (execute programs on regional data)
+python3 serve/nml_collective.py --name worker_us --port 9002 --seeds http://localhost:9001 --data demos/agent2.nml.data
+python3 serve/nml_collective.py --name worker_eu --port 9003 --seeds http://localhost:9001 --data demos/agent3.nml.data
 
-# Terminal 3
-python3 serve/nml_collective.py --name charlie --port 9003 --data demos/agent3.nml.data
+# Oracle (observes everything, answers questions, votes on data)
+python3 serve/nml_collective.py --name sibyl --port 9004 --seeds http://localhost:9001 --role oracle
+
+# Architect (generates NML programs — requires NML LLM)
+python3 serve/nml_collective.py --name daedalus --port 9005 --seeds http://localhost:9001 --role architect --llm http://localhost:8082
 ```
 
-Submit a program (broadcasts to all agents):
+Submit a program, get consensus:
 
 ```bash
 curl -X POST http://localhost:9001/submit \
   -H "Content-Type: application/json" \
   -d "{\"program\": \"$(cat demos/fraud_detection.nml)\"}"
-```
 
-Get consensus (two-phase VOTE — raw scores + oracle assessment + weighted result):
-
-```bash
 curl -X POST http://localhost:9001/consensus \
   -H "Content-Type: application/json" -d '{"strategy":"median"}'
 ```
@@ -53,54 +54,71 @@ Open the dashboard: http://localhost:9001/dashboard
 ## Architecture
 
 ```
-Agent ←→ Agent ←→ Agent       (UDP multicast + gossip)
-  ↕         ↕         ↕
- LLM       LLM       LLM      (shared central NML server)
-  ↕         ↕         ↕
-Dashboard Dashboard Dashboard  (self-hosted on every agent)
+Oracle ──spec──► Architect ──symbolic──► Sentient ──broadcast──► Workers
+  │                                        │                       │
+  │ observes all                           │ signs + nebula         │ execute + VOTE
+  │◄──── events ◄────── gossip mesh ◄──────┼───────────────────────┤
+  │                                        │                       │
+  └──── assessment ────► consensus ◄───────┴───── scores ◄─────────┘
 ```
 
 No single point of failure. Kill any agent and the rest keep running.
 
-### Agent Roles
+## Agent Roles
 
-| Role | Purpose | Executes? | Writes Nebula? |
-|------|---------|-----------|----------------|
-| **Sentient** | Signs programs, approves data, embeds nebula | No | Yes |
-| **Worker** | Submits data, executes programs, reports results | Yes | Quarantine only |
-| **Oracle** | Observes all agents, answers questions via LLM, generates specs | No | Votes with analysis |
-| **Architect** | Generates NML programs from specs via NML LLM | Dry-run only | No |
+| Role | Purpose | Executes | Signs | Votes on Data | LLM |
+|------|---------|----------|-------|---------------|-----|
+| [**Sentient**](docs/ROLE_SENTIENT.md) | Authority — signs programs, approves data, embeds Nebula | Yes | Yes | Yes (authority) | No |
+| [**Worker**](docs/ROLE_WORKER.md) | Compute — executes programs, submits data with context | Yes | No | No | No |
+| [**Oracle**](docs/ROLE_ORACLE.md) | Knowledge — observes all, answers questions, assesses consensus, votes on data | No | No | Yes (analysis) | Optional |
+| [**Architect**](docs/ROLE_ARCHITECT.md) | Builder — generates symbolic NML from specs, validates, ships compact | Dry-run | No | No | Required |
 
-## Oracle (Knowledge Layer)
+See the individual role documents in `docs/` for full specifications.
 
-The Oracle observes everything and decides nothing. She tracks every agent in the mesh, aggregates events, reads the Nebula ledger, and connects to an LLM for deep inference reasoning.
+## Oracle
+
+The Oracle maintains awareness of every agent, tracks all events, reads the Nebula, and answers questions:
 
 ```bash
-# Start an Oracle (connects to all agents, answers questions)
-python3 serve/nml_collective.py --name sibyl --port 9004 \
-    --seeds http://localhost:9001 --role oracle --llm http://localhost:8082
-
-# Ask a question
+# Ask a question (works without LLM for structured queries)
 curl -X POST http://localhost:9004/ask \
   -H "Content-Type: application/json" \
-  -d '{"question": "Which agents have executed programs and what were their scores?"}'
+  -d '{"question": "What scores did everyone get?"}'
 
-# Get full collective context
+# Full collective context
 curl http://localhost:9004/context
 
-# Get recommendations
+# Recommendations
 curl http://localhost:9004/recommend
 
-# Explain a specific program or data hash
-curl "http://localhost:9004/explain?hash=958c212f"
+# Generate a program spec for the Architect
+curl -X POST http://localhost:9004/spec \
+  -H "Content-Type: application/json" \
+  -d '{"intent": "Detect fraud in European transactions"}'
 ```
 
-The Oracle works without an LLM (structured data answers), but connects to one via `--llm` for deep reasoning. She never executes programs, never signs anything, never approves data — she only observes and answers.
+Add `--llm` for open-ended reasoning. Without it, she handles counts, status, scores, agents, events, nebula, consensus, and specific agent lookups.
+
+## Architect
+
+The Architect generates NML programs in symbolic syntax for minimal packet size:
 
 ```bash
-# Full demo: sentient + 2 workers + oracle
-bash demos/oracle_demo.sh
+# Build a program from a spec
+curl -X POST http://localhost:9005/build \
+  -H "Content-Type: application/json" \
+  -d '{"intent": "fraud detection", "features": 6, "architecture": "6→8→1"}'
+
+# Validate an existing program
+curl -X POST http://localhost:9005/validate \
+  -H "Content-Type: application/json" \
+  -d '{"program": "↓ κ @w1\n↓ λ @b1\n◼"}'
+
+# View built programs
+curl http://localhost:9005/catalog
 ```
+
+Requires `--llm` pointing to the NML-trained model. Validates by dry-run assembly with `nml-crypto`.
 
 ## Nebula (Persistent Storage)
 
@@ -109,85 +127,98 @@ Sentient agents embed a nebula — a three-layer persistent store:
 | Layer | What | Where |
 |-------|------|-------|
 | Truth | Binary tensors + per-agent transaction chains | `.nebula/objects/` + `.nebula/agents/` |
-| Speed | SQLite indexes for fast queries | `.nebula/index.db` |
-| Intelligence | Vector embeddings for semantic search | `.nebula/vectors/` |
+| Speed | SQLite indexes (status, author, domain, tags) | `.nebula/index.db` |
+| Intelligence | Vector embeddings (stats + context semantics) | `.nebula/vectors/` |
 
-Data survives restarts. Transaction chains are hash-linked and tamper-proof. Vector embeddings enable "find data compatible with this program" queries.
+Data submissions carry rich context metadata (description, domain, features, tags) stored alongside binary objects. See [docs/NEBULA_DESIGN.md](docs/NEBULA_DESIGN.md) for the full design.
 
-```bash
-# Sentient starts with persistent nebula
-python3 serve/nml_collective.py --name oracle --port 9001 --role sentient
+## Two-Phase VOTE
 
-# Query the ledger
-curl http://localhost:9001/nebula/stats
-curl http://localhost:9001/data/pool
-curl "http://localhost:9001/data/similar?hash=089405d9"
-```
-
-See [docs/NEBULA_DESIGN.md](docs/NEBULA_DESIGN.md) for the full storage architecture.
-
-## Discovery Methods
-
-| Method | Scope | Config | How |
-|--------|-------|--------|-----|
-| UDP multicast | Same subnet | None | `239.78.77.76:7776` announce every 5s |
-| mDNS/Bonjour | LAN | None | `_nml._tcp.local.` service registration |
-| WebSocket relay | WAN | `--relay ws://host:7777/ws` | NAT-friendly outbound connection |
-| Seed list | Any | `--seeds http://host:port` | HTTP gossip fallback |
-
-## WAN Relay
-
-For agents on different networks:
+1. **Phase 1** — Raw scores collected from executing agents (workers + sentients)
+2. **Phase 2** — Oracle assessment: outlier detection (z-score), confidence (high/medium/low), per-agent weights, weighted consensus
 
 ```bash
-# Start relay server
-python3 serve/nml_relay.py --port 7777
-
-# Agents connect to relay
-python3 serve/nml_collective.py --name agent_1 --port 9001 --relay ws://relay:7777/ws
+curl -X POST http://localhost:9001/consensus \
+  -H "Content-Type: application/json" -d '{"strategy":"median"}'
+# Returns: raw_consensus, consensus (weighted), assessment, weights
 ```
+
+## Discovery
+
+| Method | Scope | Config |
+|--------|-------|--------|
+| UDP multicast | Same subnet | `239.78.77.76:7776`, zero-config |
+| mDNS/Bonjour | LAN | `_nml._tcp.local.`, zero-config |
+| WebSocket relay | WAN | `--relay ws://host:7777/ws` |
+| HTTP seeds | Any | `--seeds http://host:port` |
 
 ## Demos
 
 ```bash
-# Automated demo: 3 agents + fraud detection + consensus
+# 3 agents + fraud detection + consensus
 bash demos/collective_demo.sh
 
-# Distributed fraud detection: sign + distribute + train + vote + patch
-bash demos/distributed_fraud.sh
-
-# Oracle demo: sentient + workers + oracle + ask questions
+# Sentient + workers + oracle + Q&A
 bash demos/oracle_demo.sh
 
-# Architect demo: full pipeline Oracle → Architect → Sentient → Workers
+# Full pipeline: Oracle → Architect → Sentient → Workers → VOTE
 bash demos/architect_demo.sh --llm=http://localhost:8082
+
+# Sign + distribute + train + vote + patch
+bash demos/distributed_fraud.sh
 ```
 
-## Agent Endpoints
+## Endpoints
+
+**All agents:**
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/health` | GET | Agent status |
 | `/peers` | GET | Current peer list |
-| `/peer/join` | POST | Accept new peer |
+| `/peer/join` | POST | Accept new peer (includes role) |
 | `/broadcast` | POST | Receive a program |
 | `/submit` | POST | Submit a program (broadcasts to all) |
-| `/generate` | POST | Generate NML via central LLM |
 | `/results` | GET | Execution results |
-| `/consensus` | POST | Collect and VOTE across fleet |
-| `/state` | GET | Full agent state (for dashboard) |
-| `/ws` | GET | WebSocket push (real-time updates) |
-| `/dashboard` | GET | Self-hosted web dashboard |
+| `/consensus` | POST | Two-phase VOTE across fleet |
+| `/state` | GET | Full agent state |
+| `/ws` | GET | WebSocket real-time updates |
+| `/dashboard` | GET | Role-specific web dashboard |
 | `/discover` | GET | All known agent URLs |
-| `/ask` | POST | Ask the Oracle a question (oracle only) |
-| `/context` | GET | Oracle's full collective awareness (oracle only) |
-| `/explain` | GET | Explain a program/data hash (oracle only) |
-| `/recommend` | GET | Oracle's recommendations (oracle only) |
-| `/assess` | POST | Oracle assesses consensus scores (oracle only) |
-| `/spec` | POST | Oracle generates program spec (oracle only) |
-| `/build` | POST | Architect builds NML from spec (architect only) |
-| `/validate` | POST | Architect validates NML program (architect only) |
-| `/catalog` | GET | Architect's built programs (architect only) |
+| `/data/submit` | POST | Submit data to quarantine (with context) |
+| `/data/approve` | POST | Approve quarantined data (sentient/oracle) |
+| `/data/reject` | POST | Reject quarantined data (sentient/oracle) |
+
+**Oracle only:**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/ask` | POST | Natural language question |
+| `/context` | GET | Full collective awareness |
+| `/explain` | GET | Explain a hash (program/data/consensus) |
+| `/recommend` | GET | Recommendations |
+| `/assess` | POST | Assess consensus scores |
+| `/spec` | POST | Generate program spec for Architect |
+
+**Architect only:**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/build` | POST | Build NML from spec |
+| `/validate` | POST | Validate NML program |
+| `/catalog` | GET | Built programs |
+
+## Documentation
+
+| Document | Content |
+|----------|---------|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Protocols, transport, consensus, pipeline |
+| [SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md) | Full 7-layer stack, data flow, metrics |
+| [NEBULA_DESIGN.md](docs/NEBULA_DESIGN.md) | Storage design, quarantine, data lifecycle |
+| [ROLE_SENTIENT.md](docs/ROLE_SENTIENT.md) | Sentient role specification |
+| [ROLE_WORKER.md](docs/ROLE_WORKER.md) | Worker role specification |
+| [ROLE_ORACLE.md](docs/ROLE_ORACLE.md) | Oracle role specification |
+| [ROLE_ARCHITECT.md](docs/ROLE_ARCHITECT.md) | Architect role specification |
 
 ## Dependencies
 
