@@ -125,6 +125,18 @@ canvas#nebula { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z
 .fp-peers-list span { color: #58a6ff; cursor: pointer; }
 .fp-peers-list span:hover { text-decoration: underline; }
 .fp-event { font-size: 10px; padding: 3px 0; border-bottom: 1px solid rgba(33,38,45,0.4); color: #6e7681; }
+.fp-section { margin-top: 10px; }
+.fp-check { font-size: 10px; padding: 2px 0; }
+.fp-check.pass { color: #3fb950; }
+.fp-check.fail { color: #f85149; }
+.fp-tag { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-right: 4px; margin-top: 2px; background: rgba(88,166,255,0.1); color: #58a6ff; }
+.fp-vote { font-size: 10px; padding: 4px 0; border-bottom: 1px solid rgba(33,38,45,0.3); }
+.fp-vote .vote-approve { color: #3fb950; }
+.fp-vote .vote-reject { color: #f85149; }
+.fp-evidence-item { font-size: 10px; padding: 3px 0; border-bottom: 1px solid rgba(33,38,45,0.3); color: #8b949e; }
+.fp-evidence-item .ev-type { color: #f85149; font-weight: 600; margin-right: 4px; }
+.fp-clickable { cursor: pointer; transition: border-color 0.15s; }
+.fp-clickable:hover { border-color: rgba(88,166,255,0.4) !important; }
 </style>
 </head>
 <body>
@@ -305,7 +317,7 @@ canvas.addEventListener('mousemove', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') deselectAgent();
+  if (e.key === 'Escape') closeDetailPanel();
 });
 
 function selectAgent(name) {
@@ -319,6 +331,199 @@ function deselectAgent() {
   selectedAgentName = null;
   focusAnimT = 0;
   document.getElementById('focusPanel').classList.remove('open');
+}
+
+function closeDetailPanel() {
+  deselectAgent();
+}
+
+function openDetailPanel(html) {
+  selectedAgentName = null;
+  document.getElementById('focusContent').innerHTML = html;
+  document.getElementById('focusPanel').classList.add('open');
+}
+
+function showQuarantineDetail(hash) {
+  const sentientUrl = findSentientUrl() || knownSeed;
+  fetch(sentientUrl + '/data/quarantine').then(r => r.json()).then(data => {
+    const all = data.pending || [];
+    fetch(sentientUrl + '/data/pool').then(r2 => r2.json()).then(poolData => {
+      const allPool = [];
+      for (const [name, versions] of Object.entries(poolData.pool || {})) {
+        for (const v of versions) allPool.push(v);
+      }
+      const items = [...all, ...allPool];
+      const item = items.find(i => i.hash === hash);
+      if (!item) { openDetailPanel(`<div class="fp-name">Not found</div><div style="color:#6e7681;margin-top:8px">Hash ${hash} not in quarantine or pool</div>`); return; }
+      renderDataDetail(item);
+    });
+  }).catch(() => openDetailPanel('<div class="fp-name">Error loading data</div>'));
+}
+
+function renderDataDetail(item) {
+  const ctx = item.meta?.context || {};
+  const statusColor = item.status === 'approved' ? '#3fb950' : (item.status === 'rejected' ? '#f85149' : '#d29922');
+
+  let checksHTML = '';
+  const checks = item.meta?.auto_checks?.checks || [];
+  for (const c of checks) {
+    checksHTML += `<div class="fp-check ${c.passed ? 'pass' : 'fail'}">${c.passed ? '✓' : '✗'} ${c.name}${c.detail ? ' — ' + c.detail : ''}</div>`;
+  }
+
+  let votesHTML = '';
+  for (const v of (item.votes || [])) {
+    const vc = v.vote === 'approve' ? 'vote-approve' : 'vote-reject';
+    votesHTML += `<div class="fp-vote"><span class="${vc}">${v.vote}</span> by ${v.voter || v.sentient || '?'} (${v.role || 'sentient'})`;
+    if (v.reason) votesHTML += `<div style="color:#6e7681;font-size:9px;margin-top:1px">${v.reason}</div>`;
+    if (v.analysis) {
+      votesHTML += `<div style="color:#6e7681;font-size:9px;margin-top:1px">score=${v.analysis.score}`;
+      const failed = (v.analysis.checks || []).filter(c => !c.passed);
+      if (failed.length) votesHTML += ` · ${failed.map(c => c.detail || c.name).join(', ')}`;
+      votesHTML += `</div>`;
+    }
+    votesHTML += `</div>`;
+  }
+
+  let tagsHTML = '';
+  for (const t of (ctx.tags || [])) tagsHTML += `<span class="fp-tag">${t}</span>`;
+  for (const f of (ctx.features || [])) tagsHTML += `<span class="fp-tag" style="background:rgba(63,185,80,0.1);color:#3fb950">${f}</span>`;
+
+  openDetailPanel(`
+    <div class="fp-name" style="color:${statusColor}">@${item.meta?.name || '?'}</div>
+    <span class="role-badge" style="background:${statusColor}22;color:${statusColor};margin:4px 0 8px;display:inline-block">${item.status}</span>
+    <h2>Details</h2>
+    <div class="fp-detail"><span>Hash</span><span class="val" style="font-size:10px">${item.hash}</span></div>
+    <div class="fp-detail"><span>Author</span><span class="val">${item.author}</span></div>
+    <div class="fp-detail"><span>Size</span><span class="val">${item.content_size} bytes</span></div>
+    <div class="fp-detail"><span>Type</span><span class="val">${item.type}</span></div>
+    ${ctx.description ? `<div class="fp-detail"><span>Description</span><span class="val" style="font-size:10px">${ctx.description}</span></div>` : ''}
+    ${ctx.domain ? `<div class="fp-detail"><span>Domain</span><span class="val">${ctx.domain}</span></div>` : ''}
+    ${ctx.time_range ? `<div class="fp-detail"><span>Time range</span><span class="val" style="font-size:10px">${ctx.time_range}</span></div>` : ''}
+    ${tagsHTML ? `<div class="fp-section">${tagsHTML}</div>` : ''}
+    ${checksHTML ? `<h2>Auto-Checks</h2>${checksHTML}` : ''}
+    ${votesHTML ? `<h2>Votes (${item.votes?.length || 0})</h2>${votesHTML}` : ''}
+    ${item.reason ? `<h2>Reason</h2><div style="font-size:11px;color:#f85149">${item.reason}</div>` : ''}
+  `);
+}
+
+function showThreatDetail(agentName) {
+  const enforcerUrl = findEnforcerUrl() || knownSeed;
+  fetch(enforcerUrl + '/evidence?agent=' + agentName).then(r => r.json()).then(data => {
+    const ev = data.evidence || [];
+    fetch(enforcerUrl + '/threats').then(r2 => r2.json()).then(threats => {
+      const warn = threats.warnings?.[agentName];
+      const quar = threats.quarantined?.[agentName];
+      const black = threats.blacklisted?.[agentName];
+
+      let statusColor = '#3fb950';
+      let statusText = 'clear';
+      if (black) { statusColor = '#da3633'; statusText = 'BLACKLISTED'; }
+      else if (quar) { statusColor = '#f85149'; statusText = 'QUARANTINED'; }
+      else if (warn) { statusColor = '#d29922'; statusText = `${warn.count} warning(s)`; }
+
+      let evidenceHTML = '';
+      for (const e of ev.slice(-20).reverse()) {
+        const ts = new Date(e.time * 1000).toLocaleTimeString();
+        evidenceHTML += `<div class="fp-evidence-item"><span class="ev-type">${e.type}</span>${e.detail}<div style="color:#484f58;font-size:9px">${ts}</div></div>`;
+      }
+
+      openDetailPanel(`
+        <div class="fp-name">${agentName}</div>
+        <span class="role-badge" style="background:${statusColor}22;color:${statusColor};margin:4px 0 8px;display:inline-block">${statusText}</span>
+        ${quar ? `
+          <h2>Quarantine</h2>
+          <div class="fp-detail"><span>Reason</span><span class="val" style="font-size:10px">${quar.reason}</span></div>
+          <div class="fp-detail"><span>Remaining</span><span class="val">${Math.round(quar.remaining_seconds / 60)}m</span></div>
+          <div class="fp-detail"><span>Evidence items</span><span class="val">${quar.evidence_count}</span></div>
+          <div style="margin-top:6px"><button class="thr-lift" onclick="liftQuarantine('${agentName}');closeDetailPanel()">Lift Quarantine</button></div>
+        ` : ''}
+        ${black ? `
+          <h2>Blacklist</h2>
+          <div class="fp-detail"><span>Reason</span><span class="val" style="font-size:10px">${black.reason}</span></div>
+          <div class="fp-detail"><span>Approved by</span><span class="val">${black.approved_by}</span></div>
+        ` : ''}
+        <h2>Evidence (${ev.length})</h2>
+        ${evidenceHTML || '<div style="color:#484f58;font-size:10px">No evidence collected</div>'}
+      `);
+    });
+  }).catch(() => openDetailPanel(`<div class="fp-name">Error</div><div style="color:#6e7681">Could not load evidence for ${agentName}</div>`));
+}
+
+function showDataPool(sentientUrl) {
+  fetch(sentientUrl + '/data/pool').then(r => r.json()).then(data => {
+    let html = '<div class="fp-name" style="color:#3fb950">Data Pool</div>';
+    const pool = data.pool || {};
+    const names = Object.keys(pool);
+    if (names.length === 0) {
+      html += '<div style="color:#484f58;font-size:11px;margin-top:8px">No approved data</div>';
+      openDetailPanel(html); return;
+    }
+    for (const name of names) {
+      html += `<h2>@${name} (${pool[name].length} version${pool[name].length !== 1 ? 's' : ''})</h2>`;
+      for (const v of pool[name]) {
+        html += `<div class="quarantine-item fp-clickable" onclick="showQuarantineDetail('${v.hash}')" style="cursor:pointer">
+          <span class="q-name">${v.hash}</span>
+          <span class="q-meta"> · ${v.author} · ${v.content_size}B · ${v.status}</span>
+        </div>`;
+      }
+    }
+    openDetailPanel(html);
+  }).catch(() => openDetailPanel('<div class="fp-name">Error loading data pool</div>'));
+}
+
+function showQuarantineList(sentientUrl) {
+  fetch(sentientUrl + '/data/quarantine').then(r => r.json()).then(data => {
+    const pending = data.pending || [];
+    let html = '<div class="fp-name" style="color:#d29922">Quarantine</div>';
+    if (pending.length === 0) {
+      html += '<div style="color:#484f58;font-size:11px;margin-top:8px">No pending items</div>';
+      openDetailPanel(html); return;
+    }
+    html += `<div style="color:#8b949e;font-size:11px;margin:4px 0 8px">${pending.length} item(s) pending review</div>`;
+    for (const item of pending) {
+      const ctx = item.meta?.context || {};
+      html += `<div class="quarantine-item fp-clickable" onclick="showQuarantineDetail('${item.hash}')" style="cursor:pointer">
+        <span class="q-name">@${item.meta?.name || '?'}</span>
+        <span class="q-meta"> · ${item.author} · ${item.content_size}B · ${item.votes?.length || 0} vote(s)</span>
+        ${ctx.domain ? `<div style="color:#58a6ff;font-size:9px;margin-top:2px">${ctx.domain}</div>` : ''}
+      </div>`;
+    }
+    openDetailPanel(html);
+  }).catch(() => openDetailPanel('<div class="fp-name">Error loading quarantine</div>'));
+}
+
+function findEnforcerUrl() {
+  for (const a of Object.values(agents)) {
+    if (a.role === 'enforcer') return a.url;
+  }
+  return null;
+}
+
+function showExecutionDetail(hash) {
+  const agentList = Object.values(agents);
+  const results = [];
+  for (const a of agentList) {
+    if (a.last_result?.hash === hash) {
+      results.push({ agent: a.name, role: a.role, ...a.last_result });
+    }
+  }
+
+  let resultsHTML = '';
+  for (const r of results) {
+    const scoreColor = r.score != null ? (r.score >= 0.5 ? '#f85149' : '#3fb950') : '#484f58';
+    resultsHTML += `<div class="fp-detail"><span>${r.agent} (${r.role})</span><span class="val" style="color:${scoreColor}">${r.score != null ? r.score.toFixed(4) : 'n/a'}</span></div>`;
+  }
+
+  openDetailPanel(`
+    <div class="fp-name" style="color:#d2a8ff">Program ${hash}</div>
+    <h2>Execution Results</h2>
+    ${resultsHTML || '<div style="color:#484f58;font-size:10px">No results</div>'}
+    <h2>Details</h2>
+    <div class="fp-detail"><span>Hash</span><span class="val" style="font-size:10px">${hash}</span></div>
+    <div class="fp-detail"><span>Agents with results</span><span class="val">${results.length}</span></div>
+    ${results[0]?.exit_code != null ? `<div class="fp-detail"><span>Exit code</span><span class="val">${results[0].exit_code}</span></div>` : ''}
+    ${results[0]?.success != null ? `<div class="fp-detail"><span>Success</span><span class="val">${results[0].success}</span></div>` : ''}
+  `);
 }
 
 function updateFocusPanel() {
@@ -786,7 +991,7 @@ function applyRoleLayout(role) {
   const hide = (id) => document.getElementById(id)?.classList.add('section-hidden');
 
   const headerEl = document.querySelector('.header h1');
-  const roleLabels = { sentient: 'Sentient', worker: 'Worker', oracle: 'Oracle' };
+  const roleLabels = { sentient: 'Sentient', worker: 'Worker', oracle: 'Oracle', architect: 'Architect', enforcer: 'Enforcer' };
   if (headerEl && roleLabels[role]) {
     headerEl.innerHTML = `NML Collective <span class="role-header-badge ${role}">${roleLabels[role]}</span>`;
   }
@@ -895,7 +1100,7 @@ function updateSidebar() {
       if (a.relay_connected) metaExtra += ' · relay';
     }
     const cardBorder = isThisHost ? 'border-color:rgba(255,255,255,0.25)' : '';
-    cards += `<div class="agent-card" style="${cardBorder}"><div class="name">${a.name}${roleBadge}${youBadge}</div><div class="meta">${a.peer_count} peers · ${a.programs_received} prog · ${Math.round(a.uptime_seconds)}s${metaExtra}</div><div class="score ${scoreClass}">${scoreText}</div></div>`;
+    cards += `<div class="agent-card fp-clickable" style="${cardBorder};cursor:pointer" onclick="selectAgent('${a.name}')"><div class="name">${a.name}${roleBadge}${youBadge}</div><div class="meta">${a.peer_count} peers · ${a.programs_received} prog · ${Math.round(a.uptime_seconds)}s${metaExtra}</div><div class="score ${scoreClass}">${scoreText}</div></div>`;
   }
   document.getElementById('agentCards').innerHTML = cards || '<div style="color:#484f58;font-size:11px;padding:20px 0;text-align:center">No agents</div>';
 
@@ -907,7 +1112,7 @@ function updateSidebar() {
       const score = r.score;
       const scoreColor = score != null ? (score >= 0.5 ? '#f85149' : '#3fb950') : '#8b949e';
       document.getElementById('workerResults').innerHTML = `
-        <div class="worker-results">
+        <div class="worker-results fp-clickable" onclick="showExecutionDetail('${r.hash}')" style="cursor:pointer">
           <div class="wr-label">Latest Execution</div>
           <div class="wr-score" style="color:${scoreColor}">${score != null ? score.toFixed(4) : 'no score'}</div>
           <div class="wr-hash">hash: ${r.hash || '?'} · exit: ${r.exit_code ?? '?'} · ${r.success ? 'success' : 'failed'}</div>
@@ -921,11 +1126,12 @@ function updateSidebar() {
   if (sentient && sentient.nebula_stats) {
     const ns = sentient.nebula_stats;
     window._nebulaActive = ns.quarantine_pending > 0;
+    const sUrl = sentient.url || knownSeed;
     let nebulaHTML = `
       <div class="nebula-stat"><span>Programs</span><span class="val">${ns.programs}</span></div>
-      <div class="nebula-stat"><span>Data approved</span><span class="val">${ns.data_approved}</span></div>
+      <div class="nebula-stat fp-clickable" style="cursor:pointer" onclick="showDataPool('${sUrl}')"><span>Data approved</span><span class="val">${ns.data_approved} →</span></div>
       <div class="nebula-stat"><span>Data rejected</span><span class="val">${ns.data_rejected}</span></div>
-      <div class="nebula-stat"><span>Quarantine pending</span><span class="val">${ns.quarantine_pending}</span></div>
+      <div class="nebula-stat fp-clickable" style="cursor:pointer" onclick="showQuarantineList('${sUrl}')"><span>Quarantine pending</span><span class="val">${ns.quarantine_pending} →</span></div>
       <div class="nebula-stat"><span>Executions</span><span class="val">${ns.executions}</span></div>
       <div class="nebula-stat"><span>Ledger entries</span><span class="val">${ns.ledger_entries}</span></div>
     `;
@@ -1064,11 +1270,11 @@ async function fetchQuarantine(sentientUrl) {
         }
       }
 
-      html += `<div class="quarantine-item">
+      html += `<div class="quarantine-item fp-clickable" onclick="showQuarantineDetail('${item.hash}')" style="cursor:pointer">
         <span class="q-name">@${item.meta?.name || '?'}</span>
-        <span class="q-meta"> · ${item.author} · ${item.content_size}B</span>
+        <span class="q-meta"> · ${item.author} · ${item.content_size}B · ${item.votes?.length || 0} vote(s)</span>
         ${ctxLine}${descLine}${votesHTML}
-        <div style="margin-top:4px">
+        <div style="margin-top:4px" onclick="event.stopPropagation()">
           <button class="q-approve" onclick="quarantineAction('${sentientUrl}','${item.hash}','approve')">Approve</button>
           <button class="q-reject" onclick="quarantineAction('${sentientUrl}','${item.hash}','reject')">Reject</button>
         </div>
@@ -1181,14 +1387,14 @@ async function fetchThreats() {
     let html = '';
 
     for (const [name, w] of Object.entries(data.warnings || {})) {
-      html += `<div class="threat-item"><span class="thr-name warning">${name}</span><span class="thr-meta"> · ${w.count} warning(s) · ${w.latest}</span></div>`;
+      html += `<div class="threat-item fp-clickable" onclick="showThreatDetail('${name}')" style="cursor:pointer"><span class="thr-name warning">${name}</span><span class="thr-meta"> · ${w.count} warning(s) · ${w.latest}</span></div>`;
     }
     for (const [name, q] of Object.entries(data.quarantined || {})) {
       const mins = Math.round(q.remaining_seconds / 60);
-      html += `<div class="threat-item"><span class="thr-name quarantined">${name}</span><span class="thr-meta"> · QUARANTINED · ${mins}m left · ${q.reason}</span><button class="thr-lift" onclick="liftQuarantine('${name}')">Lift</button></div>`;
+      html += `<div class="threat-item fp-clickable" onclick="showThreatDetail('${name}')" style="cursor:pointer"><span class="thr-name quarantined">${name}</span><span class="thr-meta"> · QUARANTINED · ${mins}m left</span><span onclick="event.stopPropagation()"><button class="thr-lift" onclick="liftQuarantine('${name}')">Lift</button></span></div>`;
     }
     for (const [name, b] of Object.entries(data.blacklisted || {})) {
-      html += `<div class="threat-item"><span class="thr-name blacklisted">${name}</span><span class="thr-meta"> · BLACKLISTED · by ${b.approved_by} · ${b.reason}</span></div>`;
+      html += `<div class="threat-item fp-clickable" onclick="showThreatDetail('${name}')" style="cursor:pointer"><span class="thr-name blacklisted">${name}</span><span class="thr-meta"> · BLACKLISTED · by ${b.approved_by}</span></div>`;
     }
 
     document.getElementById('threatBoard').innerHTML = html || '<div style="color:#3fb950;font-size:11px;padding:10px 0;text-align:center">All clear</div>';
