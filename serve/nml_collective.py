@@ -502,6 +502,12 @@ class CollectiveAgent:
             from nml_architect import ArchitectEngine
             self.architect = ArchitectEngine(self, llm_url=llm_url)
 
+        # Enforcers embed the immune system
+        self.enforcer = None
+        if role == "enforcer":
+            from nml_enforcer import EnforcerEngine
+            self.enforcer = EnforcerEngine(self)
+
     def log_event(self, event_type, detail=""):
         entry = {
             "time": round(time.time() - self.start_time, 1),
@@ -554,6 +560,8 @@ class CollectiveAgent:
     def _add_peer(self, name, url, role=None):
         if name == self.name or url == self.my_url:
             return
+        if self.enforcer and self.enforcer.is_quarantined(name):
+            return
         is_new = name not in self.peers
         self.peers[name] = {
             "url": url,
@@ -563,6 +571,8 @@ class CollectiveAgent:
         }
         if role == "oracle":
             self._oracle_peer_cache = url
+        if role == "enforcer":
+            self._enforcer_peer_cache = url
         if is_new:
             self.log_event("peer_discovered", f"{name} at {url}")
 
@@ -599,8 +609,8 @@ class CollectiveAgent:
         self.seen_programs[phash] = program
         self.log_event("program_received", f"hash={phash} from={source_name or 'local'}")
 
-        # Oracle and Architect observe programs but never execute them
-        if self.role in ("oracle", "architect"):
+        # Oracle, Architect, and Enforcer observe programs but never execute them
+        if self.role in ("oracle", "architect", "enforcer"):
             self.log_event(f"{self.role}_observed", f"hash={phash} (no execution)")
             self._forward_program(program, phash, source_name)
             return
@@ -708,7 +718,10 @@ class CollectiveAgent:
                         data = await resp.json()
                         for r in data.get("results", []):
                             if "score" in r:
-                                all_scores.append({"agent": r.get("agent", name), "score": r["score"]})
+                                agent_name = r.get("agent", name)
+                                if self.enforcer and self.enforcer.is_quarantined(agent_name):
+                                    continue
+                                all_scores.append({"agent": agent_name, "score": r["score"]})
                 except Exception:
                     pass
 
@@ -806,6 +819,12 @@ class CollectiveAgent:
             "mdns_service": MDNS_SERVICE_TYPE if self.mdns else None,
             "role": self.role,
             "nebula_stats": self.nebula.stats() if self.nebula else None,
+            "enforcer_stats": {
+                "warnings": len([w for ws in self.enforcer.warnings.values() for w in ws if time.time() - w["time"] < 3600]),
+                "quarantined": len(self.enforcer.quarantined),
+                "blacklisted": len(self.enforcer.blacklisted),
+                "monitor_cycles": self.enforcer.monitor_count,
+            } if self.enforcer else None,
             "architect_stats": {
                 "programs_built": self.architect.build_count,
                 "catalog_size": len(self.architect.catalog),
@@ -1143,6 +1162,90 @@ def create_collective_app(agent: CollectiveAgent):
             return _json({"error": "This agent is not an Architect"}, 403)
         return _json({"catalog": agent.architect.get_catalog()})
 
+    # ═══════════════════════════════════════════
+    # Enforcer endpoints (role-aware)
+    # ═══════════════════════════════════════════
+
+    async def handle_threats(request):
+        """Get the enforcer's threat board."""
+        if not agent.enforcer:
+            return _json({"error": "This agent is not an Enforcer"}, 403)
+        return _json(agent.enforcer.get_threat_board())
+
+    async def handle_quarantine_node(request):
+        """Enforcer quarantines a node."""
+        if not agent.enforcer:
+            return _json({"error": "This agent is not an Enforcer"}, 403)
+        body = await request.json()
+        target = body.get("agent", "")
+        reason = body.get("reason", "manual quarantine")
+        duration = body.get("duration", HEARTBEAT_INTERVAL * 720)
+        if not target:
+            return _json({"error": "agent name required"}, 400)
+        success = agent.enforcer.quarantine_node(target, reason, duration)
+        if success:
+            return _json({"status": "quarantined", "agent": target, "reason": reason})
+        return _json({"error": f"Cannot quarantine '{target}'"}, 403)
+
+    async def handle_quarantine_lift(request):
+        """Lift quarantine on a node (enforcer or sentient)."""
+        if agent.role not in ("enforcer", "sentient"):
+            return _json({"error": "Only enforcers and sentients can lift quarantine"}, 403)
+        body = await request.json()
+        target = body.get("agent", "")
+        if not target:
+            return _json({"error": "agent name required"}, 400)
+        enforcer = agent.enforcer or _get_local_enforcer()
+        if enforcer and enforcer.lift_quarantine(target, agent.name):
+            return _json({"status": "lifted", "agent": target})
+        return _json({"error": "Not quarantined"}, 404)
+
+    async def handle_blacklist_propose(request):
+        """Enforcer proposes a permanent blacklist."""
+        if not agent.enforcer:
+            return _json({"error": "This agent is not an Enforcer"}, 403)
+        body = await request.json()
+        target = body.get("agent", "")
+        reason = body.get("reason", "")
+        if not target:
+            return _json({"error": "agent name required"}, 400)
+        result = agent.enforcer.propose_blacklist(target, reason)
+        return _json(result)
+
+    async def handle_blacklist_approve(request):
+        """Sentient approves a blacklist."""
+        if agent.role != "sentient":
+            return _json({"error": "Only sentients can approve blacklists"}, 403)
+        body = await request.json()
+        target = body.get("agent", "")
+        reason = body.get("reason", "")
+        enforcer = _get_local_enforcer()
+        if not enforcer:
+            return _json({"error": "No enforcer available"}, 503)
+        enforcer.approve_blacklist(target, agent.name, reason)
+        return _json({"status": "blacklisted", "agent": target, "approved_by": agent.name})
+
+    async def handle_evidence(request):
+        """Get evidence log for a specific agent."""
+        if not agent.enforcer:
+            return _json({"error": "This agent is not an Enforcer"}, 403)
+        target = request.query.get("agent", "")
+        if not target:
+            return _json({"error": "agent query param required"}, 400)
+        return _json({"agent": target, "evidence": agent.enforcer.get_evidence(target)})
+
+    async def handle_enforce_receive(request):
+        """Receive enforcement gossip from another enforcer."""
+        body = await request.json()
+        if agent.enforcer:
+            agent.enforcer.receive_enforcement(body)
+        return _json({"status": "received"})
+
+    def _get_local_enforcer():
+        if agent.enforcer:
+            return agent.enforcer
+        return None
+
     async def handle_assess(request):
         """Oracle assesses a set of consensus scores (called by other agents)."""
         if not agent.oracle:
@@ -1203,6 +1306,9 @@ def create_collective_app(agent: CollectiveAgent):
         if agent.architect:
             await agent.architect.start()
 
+        if agent.enforcer:
+            await agent.enforcer.start()
+
     app = web.Application()
     app.on_startup.append(on_startup)
 
@@ -1233,6 +1339,13 @@ def create_collective_app(agent: CollectiveAgent):
     app.router.add_post("/build", handle_build)
     app.router.add_post("/validate", handle_validate)
     app.router.add_get("/catalog", handle_catalog)
+    app.router.add_get("/threats", handle_threats)
+    app.router.add_post("/quarantine/node", handle_quarantine_node)
+    app.router.add_post("/quarantine/lift", handle_quarantine_lift)
+    app.router.add_post("/blacklist", handle_blacklist_propose)
+    app.router.add_post("/blacklist/approve", handle_blacklist_approve)
+    app.router.add_get("/evidence", handle_evidence)
+    app.router.add_post("/enforce/receive", handle_enforce_receive)
     app.router.add_post("/assess", handle_assess)
     app.router.add_get("/favicon.ico", lambda r: web.Response(status=204))
     app.router.add_route("OPTIONS", "/{path:.*}", handle_options)
@@ -1251,7 +1364,7 @@ def main():
     parser.add_argument("--no-udp", action="store_true", help="Disable UDP multicast")
     parser.add_argument("--no-mdns", action="store_true", help="Disable mDNS/Bonjour discovery")
     parser.add_argument("--relay", default=None, help="WebSocket relay URL (e.g. ws://relay:7777/ws)")
-    parser.add_argument("--role", choices=["sentient", "worker", "oracle", "architect"], default="worker", help="Agent role")
+    parser.add_argument("--role", choices=["sentient", "worker", "oracle", "architect", "enforcer"], default="worker", help="Agent role")
     parser.add_argument("--nebula", default=None, help="Remote nebula URL (workers connect to sentient's nebula)")
     args = parser.parse_args()
 
@@ -1271,7 +1384,7 @@ def main():
         nebula_url=args.nebula,
     )
 
-    role_label = {"sentient": "SENTIENT", "worker": "WORKER", "oracle": "ORACLE", "architect": "ARCHITECT"}[args.role]
+    role_label = {"sentient": "SENTIENT", "worker": "WORKER", "oracle": "ORACLE", "architect": "ARCHITECT", "enforcer": "ENFORCER"}[args.role]
     print(f"NML Collective {role_label} '{args.name}' on :{args.port}")
     print(f"  Discovery: ", end="")
     modes = []
@@ -1309,6 +1422,8 @@ def main():
             agent.oracle.stop()
         if agent.architect:
             agent.architect.stop()
+        if agent.enforcer:
+            agent.enforcer.stop()
 
     atexit.register(cleanup)
     for sig in (signal.SIGTERM, signal.SIGINT):

@@ -4,7 +4,7 @@ A decentralized agent collective for [NML](https://github.com/dnamaz/nml) progra
 
 ## What It Does
 
-- **Four agent roles**: Sentient (authority), Worker (compute), Oracle (knowledge), Architect (builder)
+- **Five agent roles**: Sentient (authority), Worker (compute), Oracle (knowledge), Architect (builder), Enforcer (immune system)
 - **Zero-config discovery**: UDP multicast, mDNS/Bonjour, WebSocket relay, HTTP seeds
 - **Signed program distribution**: Ed25519-signed NML programs in a single UDP packet (340 bytes symbolic)
 - **Local training**: each worker runs TNET on its own data, producing diverse perspectives
@@ -36,6 +36,9 @@ python3 serve/nml_collective.py --name sibyl --port 9004 --seeds http://localhos
 
 # Architect (generates NML programs — requires NML LLM)
 python3 serve/nml_collective.py --name daedalus --port 9005 --seeds http://localhost:9001 --role architect --llm http://localhost:8082
+
+# Enforcer (quarantines bad actors, protects the mesh)
+python3 serve/nml_collective.py --name guardian --port 9006 --seeds http://localhost:9001 --role enforcer
 ```
 
 Submit a program, get consensus:
@@ -60,6 +63,8 @@ Oracle ──spec──► Architect ──symbolic──► Sentient ──broa
   │◄──── events ◄────── gossip mesh ◄──────┼───────────────────────┤
   │                                        │                       │
   └──── assessment ────► consensus ◄───────┴───── scores ◄─────────┘
+                                           │
+                              Enforcer ────┘ quarantine + bans
 ```
 
 No single point of failure. Kill any agent and the rest keep running.
@@ -72,6 +77,7 @@ No single point of failure. Kill any agent and the rest keep running.
 | [**Worker**](docs/ROLE_WORKER.md) | Compute — executes programs, submits data with context | Yes | No | No | No |
 | [**Oracle**](docs/ROLE_ORACLE.md) | Knowledge — observes all, answers questions, assesses consensus, votes on data | No | No | Yes (analysis) | Optional |
 | [**Architect**](docs/ROLE_ARCHITECT.md) | Builder — generates symbolic NML from specs, validates, ships compact | Dry-run | No | No | Required |
+| [**Enforcer**](docs/ROLE_ENFORCER.md) | Immune system — quarantines nodes, bans, evidence, gossips enforcement | No | No | No | No |
 
 See the individual role documents in `docs/` for full specifications.
 
@@ -120,6 +126,29 @@ curl http://localhost:9005/catalog
 
 Requires `--llm` pointing to the NML-trained model. Validates by dry-run assembly with `nml-crypto`.
 
+## Enforcer
+
+The Enforcer is the collective's immune system — she quarantines compromised nodes, maintains ban lists, and gossips enforcement actions across the mesh:
+
+```bash
+# View threat board
+curl http://localhost:9006/threats
+
+# Quarantine a suspicious node
+curl -X POST http://localhost:9006/quarantine/node \
+  -H "Content-Type: application/json" \
+  -d '{"agent": "worker_bad", "reason": "suspicious score pattern"}'
+
+# Lift quarantine
+curl -X POST http://localhost:9006/quarantine/lift \
+  -H "Content-Type: application/json" -d '{"agent": "worker_bad"}'
+
+# View evidence against a node
+curl "http://localhost:9006/evidence?agent=worker_bad"
+```
+
+Three levels: **warning** (logged, auto-expires) → **quarantine** (temporary isolation, gossips to mesh) → **blacklist** (permanent, requires sentient approval). Enforcers cannot quarantine sentients.
+
 ## Nebula (Persistent Storage)
 
 Sentient agents embed a nebula — a three-layer persistent store:
@@ -163,6 +192,9 @@ bash demos/oracle_demo.sh
 
 # Full pipeline: Oracle → Architect → Sentient → Workers → VOTE
 bash demos/architect_demo.sh --llm=http://localhost:8082
+
+# Enforcer quarantines bad actor, excluded from VOTE
+bash demos/enforcer_demo.sh
 
 # Sign + distribute + train + vote + patch
 bash demos/distributed_fraud.sh
@@ -208,6 +240,18 @@ bash demos/distributed_fraud.sh
 | `/validate` | POST | Validate NML program |
 | `/catalog` | GET | Built programs |
 
+**Enforcer only:**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/threats` | GET | Full threat board |
+| `/quarantine/node` | POST | Quarantine a node |
+| `/quarantine/lift` | POST | Lift quarantine (enforcer/sentient) |
+| `/blacklist` | POST | Propose permanent blacklist |
+| `/blacklist/approve` | POST | Approve blacklist (sentient only) |
+| `/evidence` | GET | Evidence log for a node |
+| `/enforce/receive` | POST | Receive enforcement gossip |
+
 ## Documentation
 
 | Document | Content |
@@ -219,6 +263,7 @@ bash demos/distributed_fraud.sh
 | [ROLE_WORKER.md](docs/ROLE_WORKER.md) | Worker role specification |
 | [ROLE_ORACLE.md](docs/ROLE_ORACLE.md) | Oracle role specification |
 | [ROLE_ARCHITECT.md](docs/ROLE_ARCHITECT.md) | Architect role specification |
+| [ROLE_ENFORCER.md](docs/ROLE_ENFORCER.md) | Enforcer role specification |
 
 ## Dependencies
 

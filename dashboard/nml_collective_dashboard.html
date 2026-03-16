@@ -55,6 +55,19 @@ canvas#nebula { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z
 .role-badge.worker { background: rgba(63,185,80,0.2); color: #3fb950; }
 .role-badge.oracle { background: rgba(210,153,34,0.2); color: #d29922; }
 .role-badge.architect { background: rgba(56,173,169,0.2); color: #38ada9; }
+.role-badge.enforcer { background: rgba(218,54,51,0.2); color: #da3633; }
+.threat-item { background: rgba(218,54,51,0.06); border: 1px solid rgba(218,54,51,0.2); border-radius: 4px; padding: 6px 8px; margin-top: 4px; font-size: 10px; }
+.threat-item .thr-name { font-weight: 600; }
+.threat-item .thr-name.warning { color: #d29922; }
+.threat-item .thr-name.quarantined { color: #f85149; }
+.threat-item .thr-name.blacklisted { color: #da3633; }
+.threat-item .thr-meta { color: #6e7681; }
+.threat-item button { border: none; padding: 2px 8px; border-radius: 3px; font-size: 9px; cursor: pointer; margin-left: 4px; }
+.threat-item .thr-lift { background: #238636; color: #fff; }
+.threat-item .thr-quarantine { background: #da3633; color: #fff; }
+.enforcer-stat { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; color: #8b949e; }
+.enforcer-stat .val { color: #da3633; font-weight: 600; }
+.enforcer-stat .val.clear { color: #3fb950; }
 .architect-stat { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; color: #8b949e; }
 .architect-stat .val { color: #38ada9; font-weight: 600; }
 .catalog-item { background: rgba(56,173,169,0.08); border: 1px solid rgba(56,173,169,0.2); border-radius: 4px; padding: 6px 8px; margin-top: 4px; font-size: 10px; }
@@ -94,6 +107,7 @@ canvas#nebula { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z
 .role-header-badge.worker { background: rgba(63,185,80,0.15); color: #3fb950; }
 .role-header-badge.oracle { background: rgba(210,153,34,0.15); color: #d29922; }
 .role-header-badge.architect { background: rgba(56,173,169,0.15); color: #38ada9; }
+.role-header-badge.enforcer { background: rgba(218,54,51,0.15); color: #da3633; }
 .bottom-bar { position: fixed; bottom: 0; left: 0; right: 340px; z-index: 5; background: rgba(5,8,15,0.85); backdrop-filter: blur(12px); border-top: 1px solid rgba(88,166,255,0.12); padding: 10px 24px; display: flex; gap: 8px; justify-content: flex-end; }
 .bottom-bar button { background: #238636; border: none; border-radius: 6px; padding: 8px 16px; color: #fff; font-family: inherit; font-size: 11px; cursor: pointer; font-weight: 600; }
 .bottom-bar button:hover { background: #2ea043; }
@@ -177,6 +191,13 @@ canvas#nebula { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z
         <div id="oracleAnswer"></div>
       </div>
     </div>
+  </div>
+
+  <!-- Enforcer: threat board -->
+  <div id="sectionEnforcer" class="section-hidden">
+    <h2>Threat Board</h2>
+    <div id="enforcerStats"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No enforcer connected</div></div>
+    <div id="threatBoard"></div>
   </div>
 
   <!-- Architect: build panel + catalog -->
@@ -558,6 +579,7 @@ function drawOrbitingAgents(time) {
     const isOracle = a.role === 'oracle';
     const isSentient = a.role === 'sentient';
     const isArchitect = a.role === 'architect';
+    const isEnforcer = a.role === 'enforcer';
     const isHost = a.url === knownSeed;
 
     /* Depth-based opacity — nodes behind the sphere are dimmer; unselected dim when something is selected */
@@ -606,7 +628,7 @@ function drawOrbitingAgents(time) {
     }
 
     /* Agent glow */
-    const glowHue = isArchitect ? 174 : (isOracle ? 38 : (isSentient ? 280 : (hasPrograms ? 140 : 220)));
+    const glowHue = isEnforcer ? 0 : (isArchitect ? 174 : (isOracle ? 38 : (isSentient ? 280 : (hasPrograms ? 140 : 220))));
     const baseGlowR = isOracle ? 34 : (isHost ? 32 : 28);
     const glowR = (baseGlowR + (isHost ? 6 : 4) * Math.sin(time * 0.004 + i)) * s;
     const glowAlpha = (isHost ? 0.6 : (isOracle ? 0.5 : 0.4)) * depthAlpha;
@@ -621,7 +643,7 @@ function drawOrbitingAgents(time) {
     const dotR = baseDotR * s;
     ctx.beginPath();
     ctx.arc(x, y, dotR, 0, Math.PI * 2);
-    ctx.fillStyle = isArchitect ? '#38ada9' : (isOracle ? '#d29922' : (isSentient ? '#d2a8ff' : (hasPrograms ? '#3fb950' : '#58a6ff')));
+    ctx.fillStyle = isEnforcer ? '#da3633' : (isArchitect ? '#38ada9' : (isOracle ? '#d29922' : (isSentient ? '#d2a8ff' : (hasPrograms ? '#3fb950' : '#58a6ff'))));
     ctx.globalAlpha = depthAlpha;
     ctx.fill();
     ctx.strokeStyle = isHost ? `rgba(255,255,255,${0.6 * depthAlpha})` : `rgba(255,255,255,${0.3 * depthAlpha})`;
@@ -652,6 +674,11 @@ function drawOrbitingAgents(time) {
         ctx.font = `bold ${scoreFontSize}px SF Mono, monospace`;
         ctx.fillText(a.last_result.score.toFixed(3), x, y + scoreYOff);
         ctx.globalAlpha = 1.0;
+      } else if (isEnforcer && !isHost) {
+        const tagSize = Math.round(11 * s);
+        ctx.fillStyle = `rgba(218, 54, 51, ${0.5 * depthAlpha})`;
+        ctx.font = `${tagSize}px SF Mono, monospace`;
+        ctx.fillText('enforcing', x, y + scoreYOff);
       } else if (isArchitect && !isHost) {
         const tagSize = Math.round(11 * s);
         ctx.fillStyle = `rgba(56, 173, 169, ${0.5 * depthAlpha})`;
@@ -788,12 +815,23 @@ function applyRoleLayout(role) {
   } else if (role === 'architect') {
     hide('sectionWorkerResults');
     hide('sectionDataSubmit');
+    hide('sectionEnforcer');
     show('sectionArchitect');
     show('sectionOracle');
     hide('sectionRecommend');
     hide('sectionNebula');
     document.getElementById('actionBar').style.display = 'none';
     fetchCatalog();
+  } else if (role === 'enforcer') {
+    hide('sectionWorkerResults');
+    hide('sectionDataSubmit');
+    hide('sectionArchitect');
+    show('sectionEnforcer');
+    show('sectionOracle');
+    hide('sectionRecommend');
+    show('sectionNebula');
+    document.getElementById('actionBar').style.display = 'none';
+    fetchThreats();
   }
 }
 
@@ -930,6 +968,20 @@ function updateSidebar() {
   } else {
     document.getElementById('oracleStats').innerHTML = '<div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No oracle in collective</div>';
     document.getElementById('oracleInteractive').style.display = 'none';
+  }
+
+  /* ─── Enforcer section ─── */
+  const enforcerAgent = agentList.find(a => a.role === 'enforcer');
+  if (enforcerAgent && enforcerAgent.enforcer_stats) {
+    const es = enforcerAgent.enforcer_stats;
+    const warnClass = es.warnings > 0 ? '' : 'clear';
+    const qClass = es.quarantined > 0 ? '' : 'clear';
+    document.getElementById('enforcerStats').innerHTML = `
+      <div class="enforcer-stat"><span>Warnings</span><span class="val ${warnClass}">${es.warnings}</span></div>
+      <div class="enforcer-stat"><span>Quarantined</span><span class="val ${qClass}">${es.quarantined}</span></div>
+      <div class="enforcer-stat"><span>Blacklisted</span><span class="val ${es.blacklisted > 0 ? '' : 'clear'}">${es.blacklisted}</span></div>
+      <div class="enforcer-stat"><span>Monitor cycles</span><span class="val clear">${es.monitor_cycles}</span></div>
+    `;
   }
 
   /* ─── Architect section ─── */
@@ -1118,6 +1170,51 @@ async function fetchRecommendations() {
     document.getElementById('oracleRecommendations').innerHTML =
       `<div style="color:#f85149;font-size:10px;padding:10px 0">Error fetching recommendations</div>`;
   }
+}
+
+/* ─── Enforcer: Threat Board ─── */
+async function fetchThreats() {
+  if (!knownSeed) return;
+  try {
+    const resp = await fetch(knownSeed + '/threats');
+    const data = await resp.json();
+    let html = '';
+
+    for (const [name, w] of Object.entries(data.warnings || {})) {
+      html += `<div class="threat-item"><span class="thr-name warning">${name}</span><span class="thr-meta"> · ${w.count} warning(s) · ${w.latest}</span></div>`;
+    }
+    for (const [name, q] of Object.entries(data.quarantined || {})) {
+      const mins = Math.round(q.remaining_seconds / 60);
+      html += `<div class="threat-item"><span class="thr-name quarantined">${name}</span><span class="thr-meta"> · QUARANTINED · ${mins}m left · ${q.reason}</span><button class="thr-lift" onclick="liftQuarantine('${name}')">Lift</button></div>`;
+    }
+    for (const [name, b] of Object.entries(data.blacklisted || {})) {
+      html += `<div class="threat-item"><span class="thr-name blacklisted">${name}</span><span class="thr-meta"> · BLACKLISTED · by ${b.approved_by} · ${b.reason}</span></div>`;
+    }
+
+    document.getElementById('threatBoard').innerHTML = html || '<div style="color:#3fb950;font-size:11px;padding:10px 0;text-align:center">All clear</div>';
+  } catch (e) {}
+}
+
+async function quarantineNode(name) {
+  if (!knownSeed) return;
+  try {
+    await fetch(knownSeed + '/quarantine/node', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: name, reason: 'dashboard action' }),
+    });
+    fetchThreats();
+  } catch (e) {}
+}
+
+async function liftQuarantine(name) {
+  if (!knownSeed) return;
+  try {
+    await fetch(knownSeed + '/quarantine/lift', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: name }),
+    });
+    fetchThreats();
+  } catch (e) {}
 }
 
 /* ─── Architect: Catalog ─── */

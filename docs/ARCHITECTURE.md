@@ -32,14 +32,15 @@ flowchart TB
 
 **Key principle:** Every agent is a peer with a specialized role. There is no leader, no hub, no single point of failure. Kill any agent and the rest continue operating.
 
-### Four Roles
+### Five Roles
 
-| Role | Purpose | Signs | Executes | Votes on Data | Generates Programs |
-|------|---------|-------|----------|---------------|-------------------|
-| [**Sentient**](ROLE_SENTIENT.md) | Authority — signs programs, approves data, embeds Nebula | Yes | Yes | Yes | No |
-| [**Worker**](ROLE_WORKER.md) | Compute — executes programs, submits data, reports results | No | Yes | No | No |
-| [**Oracle**](ROLE_ORACLE.md) | Knowledge — observes all, answers questions, assesses consensus, votes on data quality | No | No | Yes (analysis) | Specs only |
-| [**Architect**](ROLE_ARCHITECT.md) | Builder — generates NML from specs via NML LLM, validates, ships symbolic | No | Dry-run | No | Yes |
+| Role | Purpose | Signs | Executes | Votes on Data | Special |
+|------|---------|-------|----------|---------------|---------|
+| [**Sentient**](ROLE_SENTIENT.md) | Authority — signs programs, approves data, embeds Nebula | Yes | Yes | Yes | Overrides enforcers |
+| [**Worker**](ROLE_WORKER.md) | Compute — executes programs, submits data, reports results | No | Yes | No | — |
+| [**Oracle**](ROLE_ORACLE.md) | Knowledge — observes all, answers questions, assesses consensus | No | No | Yes (analysis) | Generates specs |
+| [**Architect**](ROLE_ARCHITECT.md) | Builder — generates NML from specs via NML LLM, validates | No | Dry-run | No | Ships symbolic |
+| [**Enforcer**](ROLE_ENFORCER.md) | Immune system — quarantines nodes, maintains bans, collects evidence | No | No | No | Gossips bans |
 
 See the individual role documents for full details.
 
@@ -268,6 +269,7 @@ serve/
   nml_architect.py     — Architect program builder (NML LLM, validation, symbolic)
   nml_nebula.py        — Nebula ledger (quarantine, approval, data pool, consensus)
   nml_storage.py       — Three-layer storage (disk, SQLite, vectors)
+  nml_enforcer.py      — Enforcer immune system (quarantine, bans, evidence)
   nml_relay.py         — WebSocket relay for WAN
   nml_agent.py         — Hub-and-spoke agent (legacy)
 
@@ -279,6 +281,7 @@ demos/
   oracle_demo.sh                 — Sentient + workers + oracle + Q&A
   architect_demo.sh              — Full pipeline: oracle → architect → sentient → workers
   distributed_fraud.sh           — Sign + distribute + train + vote + patch
+  enforcer_demo.sh               — Enforcer quarantines bad actor
   nebula_demo.sh                 — Data quarantine + approval + pool
   fraud_detection.nml            — Example program (classic syntax)
   fraud_detection_symbolic.nml   — Same program (symbolic, 340 bytes)
@@ -292,6 +295,7 @@ docs/
   ROLE_WORKER.md                 — Worker role specification
   ROLE_ORACLE.md                 — Oracle role specification
   ROLE_ARCHITECT.md              — Architect role specification
+  ROLE_ENFORCER.md               — Enforcer role specification
 ```
 
 ---

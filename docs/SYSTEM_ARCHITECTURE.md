@@ -105,20 +105,23 @@ flowchart TB
         relay_disc["WebSocket Relay\nws://relay:7777\nCross-network"]
         seeds_disc["HTTP Seeds\n--seeds URL\nManual fallback"]
     end
-    subgraph roles [Four Roles]
+    subgraph roles [Five Roles]
         sentient["Sentient\nSign programs\nApprove data\nEmbed nebula"]
         worker["Worker\nSubmit data\nExecute programs\nReport results"]
-        oracle_role["Oracle\nObserve all agents\nVote on data quality\nGenerate program specs\nAssess consensus"]
-        architect_role["Architect\nGenerate NML via LLM\nValidate (dry-run)\nShip symbolic compact"]
+        oracle_role["Oracle\nObserve all agents\nVote on data quality\nGenerate program specs"]
+        architect_role["Architect\nGenerate NML via LLM\nValidate + ship symbolic"]
+        enforcer_role["Enforcer\nQuarantine nodes\nMaintain bans\nCollect evidence"]
     end
     mdns --> sentient
     mdns --> worker
     mdns --> oracle_role
     mdns --> architect_role
+    mdns --> enforcer_role
     udp_disc --> sentient
     udp_disc --> worker
     udp_disc --> oracle_role
     udp_disc --> architect_role
+    udp_disc --> enforcer_role
 ```
 
 - **No orchestrator.** Every agent is a peer with a specialized role. Kill any agent and the rest continue.
@@ -126,6 +129,7 @@ flowchart TB
 - **[Workers](ROLE_WORKER.md)** are compute: they submit data, execute programs, report results
 - **[Oracles](ROLE_ORACLE.md)** are knowledge: they observe everything, vote on data quality with analysis, assess consensus, generate program specs
 - **[Architects](ROLE_ARCHITECT.md)** are builders: they generate valid NML programs from specs via the NML LLM in symbolic syntax, validate by dry-run assembly
+- **[Enforcers](ROLE_ENFORCER.md)** are the immune system: they quarantine compromised nodes, maintain ban lists, collect evidence, gossip enforcement across the mesh
 - Each agent serves a role-specific dashboard at `/dashboard`
 
 ### Layer 5: Execution
@@ -280,6 +284,6 @@ sequenceDiagram
 
 5. **The collective never forgets.** Data is classified (approved, rejected, superseded), never deleted. Bad data trains the guards. The ledger is append-only.
 
-6. **Roles are the incentive.** Sentients approve because that's their function. Workers compute because that's their function. Oracles observe because that's their function. Architects build because that's their function. The collective is an organism, not a marketplace.
+6. **Roles are the incentive.** Sentients approve because that's their function. Workers compute because that's their function. Oracles observe because that's their function. Architects build because that's their function. Enforcers protect because that's their function. The collective is an organism, not a marketplace.
 
 7. **Useful computation, not wasteful mining.** Unlike blockchain proof-of-work, every cycle of computation produces actual value — a fraud score, a risk assessment, a trained model.
