@@ -35,6 +35,16 @@ canvas#nebula { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z
 .consensus-bar .label { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; }
 .consensus-bar .value { font-size: 22px; font-weight: 700; color: #d2a8ff; margin-top: 2px; }
 .consensus-bar .strategy { font-size: 10px; color: #484f58; }
+.nebula-stat { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; color: #8b949e; }
+.nebula-stat .val { color: #d2a8ff; font-weight: 600; }
+.quarantine-item { background: rgba(210,168,255,0.08); border: 1px solid rgba(210,168,255,0.2); border-radius: 4px; padding: 6px 8px; margin-top: 4px; font-size: 10px; }
+.quarantine-item .q-name { color: #d2a8ff; font-weight: 600; }
+.quarantine-item .q-meta { color: #6e7681; }
+.quarantine-item .q-approve { background: #238636; border: none; color: #fff; padding: 2px 8px; border-radius: 3px; font-size: 9px; cursor: pointer; margin-left: 4px; }
+.quarantine-item .q-reject { background: #da3633; border: none; color: #fff; padding: 2px 8px; border-radius: 3px; font-size: 9px; cursor: pointer; margin-left: 4px; }
+.role-badge { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-left: 6px; }
+.role-badge.sentient { background: rgba(210,168,255,0.2); color: #d2a8ff; }
+.role-badge.worker { background: rgba(63,185,80,0.2); color: #3fb950; }
 .bottom-bar { position: fixed; bottom: 0; left: 0; right: 340px; z-index: 5; background: rgba(5,8,15,0.85); backdrop-filter: blur(12px); border-top: 1px solid rgba(88,166,255,0.12); padding: 10px 24px; display: flex; gap: 8px; }
 .bottom-bar input { flex: 1; background: rgba(13,17,23,0.8); border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; color: #c9d1d9; font-family: inherit; font-size: 12px; }
 .bottom-bar input:focus { outline: none; border-color: #58a6ff; }
@@ -60,6 +70,9 @@ canvas#nebula { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z
     <div class="value" id="consensusValue">-</div>
     <div class="strategy" id="consensusStrategy"></div>
   </div>
+  <h2>Nebula</h2>
+  <div id="nebulaStats"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No sentient connected</div></div>
+  <div id="quarantineList"></div>
   <h2>Event Feed</h2>
   <div id="eventFeed"><div style="color:#484f58;font-size:11px;padding:20px 0;text-align:center">Waiting for events...</div></div>
 </div>
@@ -155,32 +168,39 @@ class DataStream {
 function drawNebula(time) {
   const cx = W / 2, cy = H / 2;
 
+  const active = window._nebulaActive || false;
+  const intensity = active ? 1.5 : 1.0;
+  const coreHue = active ? 280 : 230;
+
   /* Nebula glow layers */
   const breathe = 0.85 + 0.15 * Math.sin(time * 0.001);
   for (let layer = 3; layer >= 0; layer--) {
-    const r = (50 + layer * 30) * breathe;
+    const r = (50 + layer * 30) * breathe * intensity;
     const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    const hue = 230 + layer * 15;
+    const hue = coreHue + layer * 15;
     const sat = 70 + layer * 5;
-    grad.addColorStop(0, `hsla(${hue}, ${sat}%, 50%, ${0.25 - layer * 0.05})`);
-    grad.addColorStop(0.5, `hsla(${hue + 20}, ${sat}%, 40%, ${0.1 - layer * 0.02})`);
+    const alpha = (0.25 - layer * 0.05) * intensity;
+    grad.addColorStop(0, `hsla(${hue}, ${sat}%, 50%, ${alpha})`);
+    grad.addColorStop(0.5, `hsla(${hue + 20}, ${sat}%, 40%, ${alpha * 0.4})`);
     grad.addColorStop(1, `hsla(${hue}, ${sat}%, 30%, 0)`);
     ctx.fillStyle = grad;
     ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
   }
 
-  /* Core bright point */
-  const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, 12);
-  coreGrad.addColorStop(0, `hsla(220, 100%, 90%, ${0.7 + 0.2 * Math.sin(time * 0.003)})`);
-  coreGrad.addColorStop(1, 'hsla(220, 100%, 60%, 0)');
+  /* Core bright point — pulses purple when quarantine has items */
+  const coreR = active ? 18 : 12;
+  const corePulse = active ? 0.8 + 0.2 * Math.sin(time * 0.006) : 0.7 + 0.2 * Math.sin(time * 0.003);
+  const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+  coreGrad.addColorStop(0, `hsla(${coreHue}, 100%, 90%, ${corePulse})`);
+  coreGrad.addColorStop(1, `hsla(${coreHue}, 100%, 60%, 0)`);
   ctx.fillStyle = coreGrad;
-  ctx.fillRect(cx - 12, cy - 12, 24, 24);
+  ctx.fillRect(cx - coreR, cy - coreR, coreR * 2, coreR * 2);
 
   /* Label */
-  ctx.fillStyle = `rgba(136, 192, 255, ${0.4 + 0.1 * Math.sin(time * 0.002)})`;
+  ctx.fillStyle = `rgba(${active ? '210, 168, 255' : '136, 192, 255'}, ${0.4 + 0.1 * Math.sin(time * 0.002)})`;
   ctx.font = '18px SF Mono, monospace';
   ctx.textAlign = 'center';
-  ctx.fillText('NML', cx / 2, cy / 2 + 80);
+  ctx.fillText(active ? 'NEBULA' : 'NML', cx / 2, cy / 2 + 80);
 }
 
 function drawOrbitingAgents(time) {
@@ -222,9 +242,10 @@ function drawOrbitingAgents(time) {
       }
     }
 
-    /* Agent glow */
+    /* Agent glow — sentients are purple, workers are blue/green */
     const hasPrograms = a.programs_received > 0;
-    const glowHue = hasPrograms ? 140 : 220;
+    const isSentient = a.role === 'sentient';
+    const glowHue = isSentient ? 280 : (hasPrograms ? 140 : 220);
     const glowR = 28 + 4 * Math.sin(time * 0.004 + i);
     const glow = ctx.createRadialGradient(x, y, 0, x, y, glowR);
     glow.addColorStop(0, `hsla(${glowHue}, 80%, 60%, 0.4)`);
@@ -235,7 +256,7 @@ function drawOrbitingAgents(time) {
     /* Agent dot */
     ctx.beginPath();
     ctx.arc(x, y, 8, 0, Math.PI * 2);
-    ctx.fillStyle = hasPrograms ? '#3fb950' : '#58a6ff';
+    ctx.fillStyle = isSentient ? '#d2a8ff' : (hasPrograms ? '#3fb950' : '#58a6ff');
     ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,0.3)';
     ctx.lineWidth = 1.5;
@@ -367,9 +388,27 @@ function updateSidebar() {
     const score = a.last_result?.score;
     const scoreClass = score != null ? (score >= 0.5 ? 'high' : 'low') : '';
     const scoreText = score != null ? score.toFixed(4) : '-';
-    cards += `<div class="agent-card"><div class="name">${a.name}</div><div class="meta">${a.peer_count} peers · ${a.programs_received} prog · ${Math.round(a.uptime_seconds)}s</div><div class="score ${scoreClass}">${scoreText}</div></div>`;
+    const roleBadge = a.role ? `<span class="role-badge ${a.role}">${a.role}</span>` : '';
+    cards += `<div class="agent-card"><div class="name">${a.name}${roleBadge}</div><div class="meta">${a.peer_count} peers · ${a.programs_received} prog · ${Math.round(a.uptime_seconds)}s</div><div class="score ${scoreClass}">${scoreText}</div></div>`;
   }
   document.getElementById('agentCards').innerHTML = cards || '<div style="color:#484f58;font-size:11px;padding:20px 0;text-align:center">No agents</div>';
+
+  /* Nebula stats from sentient agents */
+  const sentient = agentList.find(a => a.nebula_stats);
+  if (sentient && sentient.nebula_stats) {
+    const ns = sentient.nebula_stats;
+    window._nebulaActive = ns.quarantine_pending > 0;
+    document.getElementById('nebulaStats').innerHTML = `
+      <div class="nebula-stat"><span>Programs</span><span class="val">${ns.programs}</span></div>
+      <div class="nebula-stat"><span>Data approved</span><span class="val">${ns.data_approved}</span></div>
+      <div class="nebula-stat"><span>Data rejected</span><span class="val">${ns.data_rejected}</span></div>
+      <div class="nebula-stat"><span>Quarantine pending</span><span class="val">${ns.quarantine_pending}</span></div>
+      <div class="nebula-stat"><span>Executions</span><span class="val">${ns.executions}</span></div>
+      <div class="nebula-stat"><span>Ledger entries</span><span class="val">${ns.ledger_entries}</span></div>
+    `;
+  } else {
+    window._nebulaActive = false;
+  }
 
   allEvents.sort((a, b) => b.time - a.time);
   let feed = '';

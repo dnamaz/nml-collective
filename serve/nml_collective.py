@@ -451,7 +451,8 @@ class MDNSDiscovery:
 
 class CollectiveAgent:
     def __init__(self, name, port, llm_url, seeds, data_path, signing_key,
-                 enable_udp=True, enable_mdns=True, relay_url=None):
+                 enable_udp=True, enable_mdns=True, relay_url=None,
+                 role="worker", nebula_url=None):
         self.name = name
         self.port = port
         self.llm_url = llm_url
@@ -460,6 +461,8 @@ class CollectiveAgent:
         self.enable_udp = enable_udp
         self.enable_mdns = enable_mdns
         self.relay_url = relay_url
+        self.role = role
+        self.nebula_url = nebula_url
         self.start_time = time.time()
 
         self.local_data = None
@@ -475,6 +478,16 @@ class CollectiveAgent:
         self.mdns = None
         self.relay = None
         self.ws_clients = set()
+
+        # Sentients embed a local nebula instance
+        self.nebula = None
+        if role == "sentient":
+            from nml_nebula import Nebula
+            self.nebula = Nebula()
+            self.nebula.sentients.add(name)
+            self.nebula.event_callbacks.append(
+                lambda t, d: self.log_event(f"nebula_{t}", d)
+            )
 
     def log_event(self, event_type, detail=""):
         entry = {
@@ -714,6 +727,8 @@ class CollectiveAgent:
             "udp_multicast": f"{UDP_MULTICAST_GROUP}:{UDP_MULTICAST_PORT}" if self.udp else None,
             "mdns_enabled": self.mdns is not None and self.mdns.azc is not None,
             "mdns_service": MDNS_SERVICE_TYPE if self.mdns else None,
+            "role": self.role,
+            "nebula_stats": self.nebula.stats() if self.nebula else None,
             "relay_url": self.relay_url,
             "relay_connected": self.relay is not None and self.relay.ws is not None and not self.relay.ws.closed if self.relay else False,
             "recent_events": self.event_log[-20:],
@@ -846,6 +861,76 @@ def create_collective_app(agent: CollectiveAgent):
             agent.ws_clients.discard(ws)
         return ws
 
+    # ═══════════════════════════════════════════
+    # Nebula endpoints (role-aware)
+    # ═══════════════════════════════════════════
+
+    async def handle_data_submit(request):
+        """Worker submits data to the nebula's quarantine."""
+        body = await request.json()
+        name = body.get("name", "")
+        content = body.get("content", "")
+        if not name or not content:
+            return _json({"error": "name and content required"}, 400)
+
+        nebula = _get_nebula()
+        if not nebula:
+            return _json({"error": "No nebula available. Connect to a sentient or --nebula URL"}, 503)
+
+        entry = nebula.submit_data(name, content, author=agent.name)
+        return _json({"hash": entry.hash, "status": entry.status,
+                       "auto_checks": entry.meta.get("auto_checks")})
+
+    async def handle_data_approve(request):
+        """Sentient approves quarantined data."""
+        if agent.role != "sentient":
+            return _json({"error": "Only sentients can approve data"}, 403)
+        body = await request.json()
+        nebula = _get_nebula()
+        if not nebula:
+            return _json({"error": "No nebula"}, 503)
+        entry = nebula.approve(body.get("hash", ""), agent.name, body.get("reason", ""))
+        if entry:
+            return _json({"hash": entry.hash, "status": entry.status, "votes": entry.votes})
+        return _json({"error": "Not found or not pending"}, 404)
+
+    async def handle_data_reject(request):
+        """Sentient rejects quarantined data."""
+        if agent.role != "sentient":
+            return _json({"error": "Only sentients can reject data"}, 403)
+        body = await request.json()
+        nebula = _get_nebula()
+        if not nebula:
+            return _json({"error": "No nebula"}, 503)
+        entry = nebula.reject(body.get("hash", ""), agent.name, body.get("reason", ""))
+        if entry:
+            return _json({"hash": entry.hash, "status": entry.status, "reason": entry.reason})
+        return _json({"error": "Not found or not pending"}, 404)
+
+    async def handle_quarantine(request):
+        nebula = _get_nebula()
+        if not nebula:
+            return _json({"error": "No nebula"}, 503)
+        return _json({"pending": nebula.list_quarantine()})
+
+    async def handle_data_pool(request):
+        nebula = _get_nebula()
+        if not nebula:
+            return _json({"error": "No nebula"}, 503)
+        return _json({"pool": nebula.list_data_pool()})
+
+    async def handle_nebula_stats(request):
+        nebula = _get_nebula()
+        if not nebula:
+            return _json({"error": "No nebula"}, 503)
+        return _json(nebula.stats())
+
+    def _get_nebula():
+        """Get the nebula instance — local for sentients, remote proxy for workers."""
+        if agent.nebula:
+            return agent.nebula
+        return None
+
     async def handle_discover(request):
         """Discovery endpoint for the dashboard — returns all known agent URLs."""
         all_agents = [{"name": agent.name, "url": agent.my_url}]
@@ -905,6 +990,12 @@ def create_collective_app(agent: CollectiveAgent):
     app.router.add_get("/ws", handle_ws)
     app.router.add_get("/discover", handle_discover)
     app.router.add_get("/dashboard", handle_dashboard)
+    app.router.add_post("/data/submit", handle_data_submit)
+    app.router.add_post("/data/approve", handle_data_approve)
+    app.router.add_post("/data/reject", handle_data_reject)
+    app.router.add_get("/data/quarantine", handle_quarantine)
+    app.router.add_get("/data/pool", handle_data_pool)
+    app.router.add_get("/nebula/stats", handle_nebula_stats)
     app.router.add_route("OPTIONS", "/{path:.*}", handle_options)
 
     return app
@@ -921,6 +1012,8 @@ def main():
     parser.add_argument("--no-udp", action="store_true", help="Disable UDP multicast")
     parser.add_argument("--no-mdns", action="store_true", help="Disable mDNS/Bonjour discovery")
     parser.add_argument("--relay", default=None, help="WebSocket relay URL (e.g. ws://relay:7777/ws)")
+    parser.add_argument("--role", choices=["sentient", "worker"], default="worker", help="Agent role")
+    parser.add_argument("--nebula", default=None, help="Remote nebula URL (workers connect to sentient's nebula)")
     args = parser.parse_args()
 
     seeds = [s.strip() for s in args.seeds.split(",") if s.strip()]
@@ -935,9 +1028,12 @@ def main():
         enable_udp=not args.no_udp,
         enable_mdns=not args.no_mdns,
         relay_url=args.relay,
+        role=args.role,
+        nebula_url=args.nebula,
     )
 
-    print(f"NML Collective Agent '{args.name}' on :{args.port}")
+    role_label = "SENTIENT" if args.role == "sentient" else "WORKER"
+    print(f"NML Collective {role_label} '{args.name}' on :{args.port}")
     print(f"  Discovery: ", end="")
     modes = []
     if not args.no_udp:
