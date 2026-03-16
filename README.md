@@ -62,6 +62,30 @@ Dashboard Dashboard Dashboard  (self-hosted on every agent)
 
 No single point of failure. Kill any agent and the rest keep running.
 
+## Nebula (Persistent Storage)
+
+Sentient agents embed a nebula — a three-layer persistent store:
+
+| Layer | What | Where |
+|-------|------|-------|
+| Truth | Binary tensors + per-agent transaction chains | `.nebula/objects/` + `.nebula/agents/` |
+| Speed | SQLite indexes for fast queries | `.nebula/index.db` |
+| Intelligence | Vector embeddings for semantic search | `.nebula/vectors/` |
+
+Data survives restarts. Transaction chains are hash-linked and tamper-proof. Vector embeddings enable "find data compatible with this program" queries.
+
+```bash
+# Sentient starts with persistent nebula
+python3 serve/nml_collective.py --name oracle --port 9001 --role sentient
+
+# Query the ledger
+curl http://localhost:9001/nebula/stats
+curl http://localhost:9001/data/pool
+curl "http://localhost:9001/data/similar?hash=089405d9"
+```
+
+See [docs/NEBULA_DESIGN.md](docs/NEBULA_DESIGN.md) for the full storage architecture.
+
 ## Discovery Methods
 
 | Method | Scope | Config | How |

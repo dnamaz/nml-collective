@@ -83,7 +83,7 @@ class AutoCheckResult:
 class Nebula:
     """Content-addressed ledger with quarantine and approval."""
 
-    def __init__(self, quorum=0.5, quarantine_timeout=3600):
+    def __init__(self, quorum=0.5, quarantine_timeout=3600, storage_path=None):
         self.ledger = {}       # hash -> LedgerEntry
         self.quarantine = {}   # hash -> LedgerEntry (pending data)
         self.data_pool = {}    # @name -> [hash, hash, ...] (approved data versions)
@@ -95,6 +95,27 @@ class Nebula:
         self.quarantine_timeout = quarantine_timeout
         self.sentients = set()
         self.event_callbacks = []
+
+        self.disk = None
+        self.index = None
+        self.vectors = None
+        self.tx_logs = {}  # agent_name -> TransactionLog
+
+        if storage_path:
+            try:
+                from nml_storage import NebulaDisk, NebulaIndex, NebulaVectors
+                self.disk = NebulaDisk(storage_path)
+                self.index = NebulaIndex(storage_path)
+                self.vectors = NebulaVectors(storage_path)
+                self._emit("storage_init", f"persistent storage at {storage_path}")
+            except Exception as e:
+                self._emit("storage_error", str(e))
+
+    def get_tx_log(self, agent_name):
+        if agent_name not in self.tx_logs and self.disk:
+            from nml_storage import TransactionLog
+            self.tx_logs[agent_name] = TransactionLog(self.disk.base_path, agent_name)
+        return self.tx_logs.get(agent_name)
 
     def _emit(self, event_type, detail):
         for cb in self.event_callbacks:
@@ -112,6 +133,19 @@ class Nebula:
         entry.status = Status.APPROVED
         self.ledger[entry.hash] = entry
         self.programs[entry.hash] = entry
+
+        if self.disk:
+            from nml_storage import OBJ_PROGRAM, TX_PROGRAM_PUBLISH
+            self.disk.store(program_text, obj_type=OBJ_PROGRAM, author=author)
+            if self.index:
+                self.index.index_object(entry.hash, "program", "", author,
+                                        entry.timestamp, "approved", len(program_text))
+            if self.vectors:
+                self.vectors.embed_program(entry.hash, program_text)
+            txlog = self.get_tx_log(author)
+            if txlog:
+                txlog.append(TX_PROGRAM_PUBLISH, {"hash": entry.hash, "author": author})
+
         self._emit("program_stored", f"{entry.hash} by {author}")
         return entry
 
@@ -136,6 +170,26 @@ class Nebula:
 
         self.quarantine[entry.hash] = entry
         self.ledger[entry.hash] = entry
+
+        if self.disk:
+            from nml_storage import OBJ_DATA, TX_DATA_SUBMIT
+            self.disk.store(content, obj_type=OBJ_DATA, author=author, name=name)
+            if self.index:
+                shape = []
+                if isinstance(content, str) and "shape=" in content:
+                    try:
+                        shape_str = content.split("shape=")[1].split()[0]
+                        shape = [int(d) for d in shape_str.split(",")]
+                    except (ValueError, IndexError):
+                        pass
+                self.index.index_object(entry.hash, "data", name, author,
+                                        entry.timestamp, entry.status, len(content), shape)
+            if self.vectors:
+                self.vectors.embed_data(entry.hash, content)
+            txlog = self.get_tx_log(author)
+            if txlog:
+                txlog.append(TX_DATA_SUBMIT, {"hash": entry.hash, "name": name, "author": author})
+
         self._emit("data_quarantined", f"@{name} hash={entry.hash} by {author} auto={'PASS' if auto.passed else 'FAIL'}")
 
         if not auto.passed:
@@ -182,6 +236,13 @@ class Nebula:
             return None
 
         entry.votes.append({"sentient": sentient, "vote": "approve", "reason": reason, "time": time.time()})
+
+        if self.disk:
+            from nml_storage import TX_DATA_APPROVE
+            txlog = self.get_tx_log(sentient)
+            if txlog:
+                txlog.append(TX_DATA_APPROVE, {"hash": data_hash, "reason": reason}, refs=[data_hash])
+
         self._emit("vote_approve", f"{data_hash} by {sentient}")
 
         if self._check_quorum(entry):
@@ -198,6 +259,15 @@ class Nebula:
         entry.votes.append({"sentient": sentient, "vote": "reject", "reason": reason, "time": time.time()})
         entry.status = Status.REJECTED
         entry.reason = reason
+
+        if self.index:
+            self.index.update_status(data_hash, "rejected")
+        if self.disk:
+            from nml_storage import TX_DATA_REJECT
+            txlog = self.get_tx_log(sentient)
+            if txlog:
+                txlog.append(TX_DATA_REJECT, {"hash": data_hash, "reason": reason})
+
         self._emit("vote_reject", f"{data_hash} by {sentient}: {reason}")
         return entry
 
@@ -216,6 +286,9 @@ class Nebula:
         if name not in self.data_pool:
             self.data_pool[name] = []
         self.data_pool[name].append(entry.hash)
+
+        if self.index:
+            self.index.update_status(entry.hash, "approved")
 
         self._emit("data_approved", f"@{name} hash={entry.hash} ({len(entry.votes)} votes)")
         return entry
@@ -261,6 +334,16 @@ class Nebula:
             "timestamp": time.time(),
         }
         self.executions.append(entry)
+
+        if self.index:
+            self.index.index_execution(program_hash, data_context, agent, score, success)
+        if self.disk:
+            from nml_storage import TX_EXECUTION
+            txlog = self.get_tx_log(agent)
+            if txlog:
+                txlog.append(TX_EXECUTION, {"program": program_hash, "score": score, "success": success},
+                             refs=[program_hash])
+
         self._emit("execution_logged", f"prog={program_hash} agent={agent} score={score}")
         return entry
 
@@ -428,7 +511,57 @@ def create_nebula_app(nebula=None):
         return _json({"data": nebula.list_all_data()})
 
     async def handle_stats(request):
-        return _json(nebula.stats())
+        stats = nebula.stats()
+        if nebula.disk:
+            stats["disk"] = nebula.disk.stats()
+        if nebula.index:
+            stats["index"] = nebula.index.stats()
+        if nebula.vectors:
+            stats["vectors"] = nebula.vectors.stats()
+        stats["tx_logs"] = {name: log.stats() for name, log in nebula.tx_logs.items()}
+        return _json(stats)
+
+    async def handle_ledger(request):
+        agent = request.query.get("agent", "")
+        txlog = nebula.get_tx_log(agent) if agent else None
+        if txlog:
+            return _json({"agent": agent, "chain": txlog.get_chain(), **txlog.stats()})
+        agents = list(nebula.tx_logs.keys())
+        return _json({"agents": agents, "chains": {n: l.stats() for n, l in nebula.tx_logs.items()}})
+
+    async def handle_ledger_verify(request):
+        agent = request.query.get("agent", "")
+        txlog = nebula.get_tx_log(agent) if agent else None
+        if not txlog:
+            return _json({"error": "Agent not found"}, 404)
+        valid, msg = txlog.verify()
+        return _json({"agent": agent, "valid": valid, "message": msg})
+
+    async def handle_similar(request):
+        hash_hex = request.query.get("hash", "")
+        if not hash_hex or not nebula.vectors:
+            return _json({"error": "hash required and vectors must be enabled"}, 400)
+        results = nebula.vectors.find_similar(hash_hex, top_k=10)
+        return _json({"query": hash_hex, "similar": results})
+
+    async def handle_compatible(request):
+        program = request.query.get("program", "")
+        if not program or not nebula.vectors:
+            return _json({"error": "program hash required and vectors must be enabled"}, 400)
+        data_hashes = [e.hash for e in nebula.ledger.values() if e.type == EntryType.DATA]
+        results = nebula.vectors.find_compatible(program, data_hashes, top_k=10)
+        return _json({"program": program, "compatible_data": results})
+
+    async def handle_storage_stats(request):
+        result = {}
+        if nebula.disk:
+            result["disk"] = nebula.disk.stats()
+        if nebula.index:
+            result["index"] = nebula.index.stats()
+        if nebula.vectors:
+            result["vectors"] = nebula.vectors.stats()
+        result["tx_logs"] = {n: l.stats() for n, l in nebula.tx_logs.items()}
+        return _json(result)
 
     async def handle_register_sentient(request):
         body = await request.json()
@@ -453,6 +586,11 @@ def create_nebula_app(nebula=None):
     app.router.add_get("/executions", handle_executions)
     app.router.add_post("/consensus", handle_consensus)
     app.router.add_get("/stats", handle_stats)
+    app.router.add_get("/ledger", handle_ledger)
+    app.router.add_get("/ledger/verify", handle_ledger_verify)
+    app.router.add_get("/data/similar", handle_similar)
+    app.router.add_get("/data/compatible", handle_compatible)
+    app.router.add_get("/storage", handle_storage_stats)
     app.router.add_post("/sentient/register", handle_register_sentient)
     app.router.add_route("OPTIONS", "/{path:.*}", lambda r: web.Response(status=204, headers=_cors()))
     return app
@@ -464,9 +602,10 @@ def main():
 
     parser = argparse.ArgumentParser(description="NML Nebula — the collective's brain")
     parser.add_argument("--port", type=int, default=7700, help="Nebula port (default: 7700)")
+    parser.add_argument("--storage", type=str, default=".nebula", help="Storage path (default: .nebula)")
     args = parser.parse_args()
 
-    nebula = Nebula()
+    nebula = Nebula(storage_path=args.storage)
     nebula._emit = lambda t, d: print(f"  [nebula] {t}: {d}")
 
     app = create_nebula_app(nebula)

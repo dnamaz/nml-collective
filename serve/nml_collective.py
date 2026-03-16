@@ -479,11 +479,12 @@ class CollectiveAgent:
         self.relay = None
         self.ws_clients = set()
 
-        # Sentients embed a local nebula instance
+        # Sentients embed a local nebula instance with persistent storage
         self.nebula = None
         if role == "sentient":
             from nml_nebula import Nebula
-            self.nebula = Nebula()
+            storage = str(PROJECT_ROOT / ".nebula")
+            self.nebula = Nebula(storage_path=storage)
             self.nebula.sentients.add(name)
             self.nebula.event_callbacks.append(
                 lambda t, d: self.log_event(f"nebula_{t}", d)

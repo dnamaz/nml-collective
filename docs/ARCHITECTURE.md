@@ -234,6 +234,49 @@ docs/
 
 ---
 
+## Nebula Storage
+
+The nebula persists all data across three layers. Only Layer 1 is truth — Layers 2 and 3 are derived and rebuildable.
+
+```mermaid
+flowchart TD
+    submit["Worker submits data"]
+    submit --> binary["Write binary tensor\n.nebula/objects/"]
+    submit --> tx["Append to agent chain\n.nebula/agents/"]
+    binary --> sqlite["Index in SQLite\n.nebula/index.db"]
+    binary --> vec["Compute embedding\n.nebula/vectors/"]
+    tx --> sqlite
+    sqlite --> query["Query: status, author\ntimestamp, @name"]
+    vec --> similar["Semantic: find similar\nfind compatible"]
+```
+
+| Layer | Purpose | File | Rebuildable? |
+|-------|---------|------|-------------|
+| 1a: Objects | Binary tensors by hash | `.nebula/objects/` | No (source of truth) |
+| 1b: Chains | Per-agent transaction log | `.nebula/agents/` | No (source of truth) |
+| 2: Index | Fast queries | `.nebula/index.db` | Yes (from Layer 1) |
+| 3: Vectors | Semantic search | `.nebula/vectors/` | Yes (from Layer 1) |
+
+### Transaction Chain Integrity
+
+Each agent's chain is hash-linked. Cross-agent references create a DAG:
+
+```mermaid
+flowchart LR
+    subgraph oracle_chain [oracle]
+        O0["tx#0 JOIN"] --> O1["tx#1 PUBLISH"] --> O2["tx#2 APPROVE"] --> O3["tx#3 CONSENSUS"]
+    end
+    subgraph w1_chain [worker_1]
+        W0["tx#0 JOIN"] --> W1["tx#1 SUBMIT"] --> W2["tx#2 EXECUTION"]
+    end
+    W1 -.->|ref| O2
+    W2 -.->|ref| O3
+```
+
+Verify chain integrity: `GET /ledger/verify?agent=oracle`
+
+---
+
 ## Dependencies
 
 | Dependency | Purpose | Required? |

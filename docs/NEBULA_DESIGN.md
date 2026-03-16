@@ -273,6 +273,109 @@ The ledger is **append-only**. Nothing is modified or deleted. New entries refer
 
 ---
 
+## Storage Architecture
+
+Three layers, each building on the one below. Only Layer 1 is the source of truth.
+
+```mermaid
+flowchart TB
+    subgraph layer1 [Layer 1 — Truth]
+        objects["Content-Addressed Objects\n.nebula/objects/\nBinary tensors by hash"]
+        chains["Per-Agent Transaction Chains\n.nebula/agents/\nSigned, hash-linked"]
+    end
+    subgraph layer2 [Layer 2 — Speed]
+        sqlite["SQLite Indexes\n.nebula/index.db\nstatus, author, timestamp, @name"]
+    end
+    subgraph layer3 [Layer 3 — Intelligence]
+        vectors["Vector Embeddings\n.nebula/vectors/\nProgram + data fingerprints"]
+    end
+    objects --> sqlite
+    chains --> sqlite
+    objects --> vectors
+    sqlite --> query["Fast queries"]
+    vectors --> similar["Semantic search"]
+```
+
+### Layer 1: Truth
+
+**Content-addressed tensor objects** (`serve/nml_storage.py: NebulaDisk`):
+- Every program, data batch, and manifest stored as binary files
+- Filename = SHA-256 hash of content (first 2 chars as subdirectory)
+- Binary format: `NML\x02` magic + hash + type + author + timestamp + shape + dtype + content
+- Immutable: once written, never modified or deleted
+
+**Per-agent transaction chains** (`serve/nml_storage.py: TransactionLog`):
+- Each agent has an append-only binary log: `.nebula/agents/{name}/chain.binlog`
+- Each transaction: `tx_id + hash + prev_hash + timestamp + agent + type + refs + content`
+- Hash chain: `hash = SHA-256(prev_hash + type + content + timestamp)`
+- Self-verifying: walk the chain, recompute hashes, any mismatch = tampering
+- Cross-agent refs create a DAG — mutual accountability across agents
+
+Transaction types:
+```
+0x01 AGENT_JOIN       0x10 PROGRAM_PUBLISH    0x20 DATA_SUBMIT
+0x02 AGENT_LEAVE      0x11 PROGRAM_BROADCAST  0x21 DATA_APPROVE
+                                               0x22 DATA_REJECT
+0x30 EXECUTION        0x31 CONSENSUS          0x40 MANIFEST_CREATE
+```
+
+### Layer 2: Speed
+
+**SQLite indexes** (`serve/nml_storage.py: NebulaIndex`):
+- Single file: `.nebula/index.db`
+- Tables: `objects`, `transactions`, `executions`, `consensus`
+- Indexes on: status, name, author, timestamp, program_hash
+- Derived from Layer 1 — rebuildable if lost
+
+### Layer 3: Intelligence
+
+**Vector embeddings** (`serve/nml_storage.py: NebulaVectors`):
+- Programs: embedded by opcode histogram (82 dimensions)
+- Data: embedded by statistical signature (mean, std, min, max per feature)
+- Stored as 64-dim float32 vectors (256 bytes each)
+- Similarity search: find programs like X, find data compatible with program Y
+- Meta-circular: the collective can use NML programs to compute its own embeddings
+
+### Disk Layout
+
+```
+.nebula/
+  objects/
+    95/8c212fb9240ba3.obj     binary program
+    08/9405d94f196663.obj     binary data batch
+    3b/be64393e2c8fa9.obj     binary data batch
+  agents/
+    oracle/chain.binlog       sentient's transaction chain
+    worker_1/chain.binlog     worker's chain
+    worker_2/chain.binlog     worker's chain
+  vectors/
+    958c212fb9240ba3.vec      program embedding (256 bytes)
+    089405d94f196663.vec      data embedding (256 bytes)
+  index.db                    SQLite (derived, rebuildable)
+```
+
+### Scale
+
+| Scale | Objects | Chains | Index | Vectors | Total |
+|-------|---------|--------|-------|---------|-------|
+| 1K batches | 10 MB | 1 MB | 100 KB | 1 MB | ~12 MB |
+| 100K batches | 1 GB | 100 MB | 10 MB | 100 MB | ~1.2 GB |
+| 10M batches | 100 GB | 10 GB | 1 GB | 10 GB | ~121 GB |
+
+A Raspberry Pi can hold the full ledger for years. Only at 10M+ batches does sharding become necessary.
+
+### API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/ledger?agent=X` | GET | View an agent's transaction chain |
+| `/ledger/verify?agent=X` | GET | Verify chain integrity |
+| `/data/similar?hash=X` | GET | Find data similar to X (vector search) |
+| `/data/compatible?program=X` | GET | Find data compatible with program X |
+| `/storage` | GET | Disk, index, and vector stats |
+
+---
+
 ## Implementation Plan
 
 ### Phase 1: Nebula Core (`serve/nml_nebula.py`)
