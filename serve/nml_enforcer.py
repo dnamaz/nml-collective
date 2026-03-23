@@ -19,6 +19,7 @@ Usage (embedded in agent):
 """
 
 import asyncio
+import hashlib
 import json
 import time
 from aiohttp import ClientSession
@@ -52,6 +53,10 @@ class EnforcerEngine:
         self.blacklisted = {}    # agent_name -> {reason, time, approved_by}
         self.evidence = {}       # agent_name -> [{type, detail, time}]
         self.submission_tracker = {}  # agent_name -> [timestamps]
+
+        # Node identity tracking (populated from MSG_ANNOUNCE / MSG_HEARTBEAT)
+        self.machine_to_agent = {}  # machine_hash16 -> agent_name
+        self.agent_to_machine = {}  # agent_name -> machine_hash16
 
         self.monitor_count = 0
 
@@ -356,10 +361,103 @@ class EnforcerEngine:
                 return ThreatLevel.WARNING
         return ThreatLevel.CLEAR
 
+    # ═══════════════════════════════════════════
+    # Node identity verification
+    # ═══════════════════════════════════════════
+
+    def _derive_node_id(self, machine_hash_hex: str, agent_name: str) -> str:
+        """Re-derive the expected node_id from machine_hash and agent_name.
+
+        Mirrors the C derivation in identity.c:
+            node_id = SHA-256(machine_hash_bytes[8] || ':' || agent_name)[0:8]
+        """
+        machine_hash_bytes = bytes.fromhex(machine_hash_hex)
+        msg = machine_hash_bytes + b":" + agent_name.encode("utf-8")
+        return hashlib.sha256(msg).digest()[:8].hex()
+
+    def check_node_identity(self, agent_name: str, payload: str) -> bool:
+        """Verify tamper-evident node identity from ANNOUNCE/HEARTBEAT payload.
+
+        payload format: "<machine_hash16>:<node_id16>"  (exactly 33 chars)
+
+        Returns True if identity is valid or payload is empty (legacy node).
+        Quarantines the node and returns False on any violation.
+        """
+        if not payload:
+            # Legacy Python-only node — no identity payload expected
+            self.agent.log_event("enforcer_identity_legacy",
+                                 f"{agent_name}: no identity payload (unverified)")
+            return True
+
+        # Structural validation
+        if len(payload) != 33 or payload[16] != ":":
+            self._record_evidence(agent_name, "malformed_identity",
+                                  f"payload='{payload[:40]}'")
+            self.warn(agent_name,
+                      f"Malformed identity payload (len={len(payload)})")
+            return False
+
+        received_machine_hash = payload[:16]
+        received_node_id = payload[17:]
+
+        # Rule 1: re-derive node_id and compare — detects tampered payloads
+        try:
+            expected_node_id = self._derive_node_id(received_machine_hash, agent_name)
+        except ValueError:
+            self._record_evidence(agent_name, "malformed_identity",
+                                  f"invalid hex in machine_hash: {received_machine_hash}")
+            self.warn(agent_name, "Identity payload contains invalid hex")
+            return False
+
+        if received_node_id != expected_node_id:
+            detail = (f"machine={received_machine_hash} "
+                      f"expected_node_id={expected_node_id} "
+                      f"received={received_node_id}")
+            self._record_evidence(agent_name, "identity_tampered", detail)
+            self.quarantine_node(agent_name,
+                                 f"Tampered identity: node_id mismatch ({detail})")
+            return False
+
+        # Rule 2: one-node-per-machine — quarantine second registrant
+        existing_agent = self.machine_to_agent.get(received_machine_hash)
+        if existing_agent and existing_agent != agent_name:
+            detail = (f"machine={received_machine_hash} already registered "
+                      f"to '{existing_agent}', new claimant='{agent_name}'")
+            self._record_evidence(agent_name, "machine_conflict", detail)
+            self.quarantine_node(agent_name,
+                                 f"One-node-per-machine violation: {detail}")
+            return False
+
+        # Rule 3: anti-name-spoofing — quarantine if name seen from new machine
+        existing_machine = self.agent_to_machine.get(agent_name)
+        if existing_machine and existing_machine != received_machine_hash:
+            detail = (f"agent='{agent_name}' was on machine={existing_machine}, "
+                      f"now claims machine={received_machine_hash}")
+            self._record_evidence(agent_name, "machine_spoofed", detail)
+            self.quarantine_node(agent_name,
+                                 f"Name-spoofing detected: {detail}")
+            return False
+
+        # All checks passed — record / update bindings
+        if received_machine_hash not in self.machine_to_agent:
+            self.agent.log_event("enforcer_identity_registered",
+                                 f"{agent_name} machine={received_machine_hash}")
+        self.machine_to_agent[received_machine_hash] = agent_name
+        self.agent_to_machine[agent_name] = received_machine_hash
+        return True
+
+    def get_identity_registry(self) -> dict:
+        """Return current machine-to-agent and agent-to-machine bindings."""
+        return {
+            "machine_to_agent": dict(self.machine_to_agent),
+            "agent_to_machine": dict(self.agent_to_machine),
+        }
+
     def get_threat_board(self):
         """Full threat board for the dashboard."""
         board = {"warnings": {}, "quarantined": {}, "blacklisted": {},
-                 "monitor_cycles": self.monitor_count}
+                 "monitor_cycles": self.monitor_count,
+                 "identity_bindings": len(self.machine_to_agent)}
 
         for name, warns in self.warnings.items():
             recent = [w for w in warns if time.time() - w["time"] < 3600]

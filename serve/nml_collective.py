@@ -182,6 +182,8 @@ class NMLMulticastProtocol(asyncio.DatagramProtocol):
             self.agent._add_peer(peer_name, peer_url)
             if msg_type == MSG_ANNOUNCE:
                 self.agent.log_event("udp_peer", f"{peer_name} at {peer_url}")
+            if self.agent.enforcer and payload:
+                self.agent.enforcer.check_node_identity(peer_name, payload)
 
         elif msg_type == MSG_PROGRAM:
             program = from_compact(payload)
