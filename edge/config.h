@@ -34,6 +34,12 @@
 #define NML_MAX_CYCLES 1000000
 #endif
 
+/* Maximum tensor size in bytes — override via -DNML_MAX_TENSOR_SIZE=N.
+   Also used as the ceiling for HTTP data-fetch buffers. */
+#ifndef NML_MAX_TENSOR_SIZE
+#define NML_MAX_TENSOR_SIZE 1048576
+#endif
+
 /* Heartbeat interval (seconds) — must match HEARTBEAT_INTERVAL in nml_collective.py */
 #define HEARTBEAT_INTERVAL 5
 

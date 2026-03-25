@@ -90,6 +90,28 @@ void identity_init(const char *agent_name,
                    char    *node_id_hex_out,          /* 17 bytes */
                    char    *payload_out);             /* 34 bytes */
 
+/* ── Payload verification ─────────────────────────────────────────────────── */
+
+/*
+ * Verify a node identity payload received in MSG_ANNOUNCE or MSG_HEARTBEAT.
+ * payload format: "<machine_hash16>:<node_id16>" (exactly 33 chars + NUL)
+ *
+ * Re-derives the expected node_id from (machine_hash_bytes, agent_name) and
+ * compares against the received value.
+ *
+ * Returns:
+ *   0   — valid; machine_hash_out and node_id_out (each 17 bytes) populated
+ *  -1   — payload is NULL or empty (legacy node, no identity to verify)
+ *  -2   — malformed (wrong length, bad separator, or non-hex characters)
+ *  -3   — node_id does not match derivation (tampered or spoofed identity)
+ *
+ * machine_hash_out and node_id_out may each be NULL if the caller doesn't
+ * need them.
+ */
+int identity_verify_payload(const char *agent_name, const char *payload,
+                             char *machine_hash_out,  /* 17 bytes or NULL */
+                             char *node_id_out);      /* 17 bytes or NULL */
+
 /* ── ARM BSP hook ─────────────────────────────────────────────────────────── */
 
 /*

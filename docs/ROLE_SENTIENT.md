@@ -1,6 +1,19 @@
 # Role: Sentient
 
-The authority of the collective. Sentients sign programs, approve data, and embed the Nebula ledger. They are the trust anchors — without a sentient, programs can't be signed and data can't be promoted from quarantine.
+The central will of the collective. While every agent votes and executes, the Sentient is the only role that can *commit* — it signs programs, finalizes data out of quarantine, and owns the Nebula ledger that all other agents read from.
+
+The rest of the collective can observe, deliberate, and vote indefinitely, but nothing becomes durable without a Sentient. It is the consensus finalizer and the identity anchor: the Collective's trust root and continuity persist through the Sentient's key material even as other nodes join and leave.
+
+Pipeline position:
+
+```
+Oracle specs → Architect builds → Sentient signs → Workers execute → VOTE → Sentient approves data
+```
+
+Special protections that reflect this role's centrality:
+- Enforcers **cannot quarantine** a Sentient
+- Blacklist decisions require **Sentient approval** (`--approve` flag)
+- Only Sentients hold Ed25519 **private keys** — all other roles verify only
 
 ## Identity
 

@@ -12,8 +12,8 @@ void peer_table_init(PeerTable *t)
     memset(t, 0, sizeof(*t));
 }
 
-PeerEntry *peer_upsert(PeerTable *t, const char *name, uint16_t port,
-                       const char *identity, time_t now)
+PeerEntry *peer_upsert(PeerTable *t, const char *name, const char *ip,
+                       uint16_t port, const char *identity, time_t now)
 {
     /* Search for existing entry */
     for (int i = 0; i < t->count; i++) {
@@ -21,6 +21,10 @@ PeerEntry *peer_upsert(PeerTable *t, const char *name, uint16_t port,
             strncmp(t->entries[i].name, name, sizeof(t->entries[i].name) - 1) == 0) {
             t->entries[i].port      = port;
             t->entries[i].last_seen = now;
+            if (ip && *ip) {
+                strncpy(t->entries[i].ip, ip, sizeof(t->entries[i].ip) - 1);
+                t->entries[i].ip[sizeof(t->entries[i].ip) - 1] = '\0';
+            }
             if (identity && *identity) {
                 strncpy(t->entries[i].identity_payload, identity,
                         sizeof(t->entries[i].identity_payload) - 1);
@@ -36,6 +40,8 @@ PeerEntry *peer_upsert(PeerTable *t, const char *name, uint16_t port,
     PeerEntry *e = &t->entries[t->count++];
     memset(e, 0, sizeof(*e));
     strncpy(e->name, name, sizeof(e->name) - 1);
+    if (ip && *ip)
+        strncpy(e->ip, ip, sizeof(e->ip) - 1);
     e->port      = port;
     e->last_seen = now;
     e->active    = 1;
@@ -139,6 +145,12 @@ int peer_list_json(const PeerTable *t, char *out, size_t out_sz)
 
         EMIT("{\"name\":");
         EMIT_STR(e->name);
+
+        EMIT(",\"ip\":");
+        EMIT_STR(e->ip);
+
+        EMIT(",\"role\":");
+        EMIT_STR(e->role);
 
         char tmp[64];
         snprintf(tmp, sizeof(tmp), ",\"port\":%u", e->port);

@@ -81,7 +81,8 @@ int udp_send(UDPContext *ctx, const char *mcast_group, uint16_t port,
                        (struct sockaddr *)&dst, sizeof(dst));
 }
 
-int udp_recv(UDPContext *ctx, uint8_t *buf, size_t buf_sz, int timeout_ms)
+int udp_recv(UDPContext *ctx, uint8_t *buf, size_t buf_sz, int timeout_ms,
+             char *sender_ip_out)
 {
     fd_set fds;
     FD_ZERO(&fds);
@@ -94,5 +95,13 @@ int udp_recv(UDPContext *ctx, uint8_t *buf, size_t buf_sz, int timeout_ms)
     struct timeval *tvp = timeout_ms < 0 ? NULL : &tv;
     int rc = select(ctx->recv_fd + 1, &fds, NULL, NULL, tvp);
     if (rc <= 0) return rc;
-    return (int)recv(ctx->recv_fd, buf, buf_sz, 0);
+
+    struct sockaddr_in src;
+    socklen_t src_len = sizeof(src);
+    int n = (int)recvfrom(ctx->recv_fd, buf, buf_sz, 0,
+                          (struct sockaddr *)&src, &src_len);
+    if (n > 0 && sender_ip_out) {
+        inet_ntop(AF_INET, &src.sin_addr, sender_ip_out, 46);
+    }
+    return n;
 }

@@ -132,6 +132,47 @@ void identity_init(const char *agent_name,
     identity_payload(machine_hash_hex_out, node_id_hex_out, payload_out);
 }
 
+/* ── Payload verification ─────────────────────────────────────────────────── */
+
+int identity_verify_payload(const char *agent_name, const char *payload,
+                             char *machine_hash_out, char *node_id_out)
+{
+    if (!payload || !*payload) return -1;
+    if (strlen(payload) != 33 || payload[16] != ':') return -2;
+
+    /* Hex-decode the 16-char machine_hash into 8 bytes */
+    uint8_t mhash_bytes[8];
+    for (int i = 0; i < 8; i++) {
+        const char *p = payload + i * 2;
+        unsigned int hi, lo;
+#define HEXVAL(c) ((c) >= '0' && (c) <= '9' ? (unsigned)((c) - '0') : \
+                   (c) >= 'a' && (c) <= 'f' ? (unsigned)((c) - 'a' + 10) : \
+                   (c) >= 'A' && (c) <= 'F' ? (unsigned)((c) - 'A' + 10) : 255u)
+        hi = HEXVAL(p[0]);
+        lo = HEXVAL(p[1]);
+#undef HEXVAL
+        if (hi == 255u || lo == 255u) return -2;
+        mhash_bytes[i] = (uint8_t)((hi << 4) | lo);
+    }
+
+    /* Re-derive the expected node_id */
+    char expected_nid[17];
+    identity_node_id(mhash_bytes, agent_name, expected_nid);
+
+    /* Compare against the received node_id (payload[17..32]) */
+    if (strncmp(payload + 17, expected_nid, 16) != 0) return -3;
+
+    if (machine_hash_out) {
+        memcpy(machine_hash_out, payload, 16);
+        machine_hash_out[16] = '\0';
+    }
+    if (node_id_out) {
+        memcpy(node_id_out, payload + 17, 16);
+        node_id_out[16] = '\0';
+    }
+    return 0;
+}
+
 /* ── ARM BSP hook (weak default) ─────────────────────────────────────────── */
 
 __attribute__((weak))

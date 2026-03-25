@@ -67,7 +67,7 @@ echo "  Agent scores: ${SCORES[0]}, ${SCORES[1]}, ${SCORES[2]}"
 echo "  Median (VOTE): $MEDIAN"
 
 # Determine consensus
-CONSENSUS=$(python3 -c "print('FRAUD' if float('$MEDIAN') >= 0.5 else 'LEGITIMATE')")
+CONSENSUS=$(echo "$MEDIAN 0.5" | awk '{print ($1+0 >= $2+0) ? "FRAUD" : "LEGITIMATE"}')
 echo "  Consensus decision: $CONSENSUS"
 
 echo ""
@@ -99,7 +99,7 @@ done
 
 IFS=$'\n' SORTED2=($(sort -n <<<"${SCORES2[*]}")); unset IFS
 MEDIAN2=${SORTED2[1]}
-CONSENSUS2=$(python3 -c "print('FRAUD' if float('$MEDIAN2') >= 0.6 else 'LEGITIMATE')")
+CONSENSUS2=$(echo "$MEDIAN2 0.6" | awk '{print ($1+0 >= $2+0) ? "FRAUD" : "LEGITIMATE"}')
 echo ""
 echo "  Updated consensus (threshold=0.6): $CONSENSUS2"
 

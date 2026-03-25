@@ -5,3 +5,19 @@ __pycache__/
 dist/
 build/
 .env
+
+# C build artifacts
+*.o
+*.a
+edge/edge_worker
+edge/test_mqtt
+
+# Role binaries
+roles/*/architect_agent
+roles/*/custodian_agent
+roles/*/emissary_agent
+roles/*/enforcer_agent
+roles/*/herald_agent
+roles/*/oracle_agent
+roles/*/sentient_agent
+roles/*/worker_agent

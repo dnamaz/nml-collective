@@ -1,153 +1,200 @@
 # NML Collective — Autonomous Agent Mesh
 
-A decentralized agent collective for [NML](https://github.com/dnamaz/nml) programs. Specialized agents self-discover, broadcast signed programs via UDP multicast, train locally, and reach consensus — no central orchestrator.
+A decentralized agent collective for [NML](https://github.com/dnamaz/nml) programs. Specialized agents self-discover, broadcast signed programs via MQTT, train locally, and reach consensus — no central orchestrator.
 
 ## What It Does
 
-- **Five agent roles**: Sentient (authority), Worker (compute), Oracle (knowledge), Architect (builder), Enforcer (immune system)
-- **Zero-config discovery**: UDP multicast, mDNS/Bonjour, WebSocket relay, HTTP seeds
-- **Signed program distribution**: Ed25519-signed NML programs in a single UDP packet (340 bytes symbolic)
+- **Seven agent roles**: Sentient (authority), Worker (compute), Oracle (knowledge), Architect (builder), Enforcer (immune system), Herald (mesh infrastructure), Emissary (external boundary)
+- **MQTT transport**: publish/subscribe mesh via Herald broker — QoS delivery, retained presence, Last Will on disconnect
+- **Signed program distribution**: Ed25519-signed NML programs in a single packet (340 bytes symbolic)
 - **Local training**: each worker runs TNET on its own data, producing diverse perspectives
 - **Two-phase VOTE consensus**: raw scores + Oracle assessment (outlier detection, confidence, weights)
 - **Data quarantine**: multi-role voting with Oracle analysis before data enters the pool
 - **Program pipeline**: Oracle specs → Architect builds symbolic NML → Sentient signs → Workers execute
-- **Real-time dashboard**: role-specific UI with 3D visualization, click-to-focus, zoom
+- **External boundary**: all human and inter-collective traffic enters through the Emissary
 
 ## Quick Start
 
-Requires [NML](https://github.com/dnamaz/nml) runtime built with crypto support:
+Build the C99 collective (requires GCC and [NML](https://github.com/dnamaz/nml) runtime):
 
 ```bash
-cd ../nml && make nml-crypto
+make          # builds edge/libcollective.a + all 8 role binaries
 ```
 
 Start a minimal collective:
 
 ```bash
+# Herald (MQTT broker — must start first)
+./roles/herald/herald_agent --broker-port 1883 &
+
 # Sentient (signs programs, manages data)
-python3 serve/nml_collective.py --name prime --port 9001 --role sentient --data demos/agent1.nml.data
+./roles/sentient/sentient_agent --name prime --port 9001 \
+  --broker 127.0.0.1 --data demos/agent1.nml.data &
 
 # Workers (execute programs on regional data)
-python3 serve/nml_collective.py --name worker_us --port 9002 --seeds http://localhost:9001 --data demos/agent2.nml.data
-python3 serve/nml_collective.py --name worker_eu --port 9003 --seeds http://localhost:9001 --data demos/agent3.nml.data
+./roles/worker/worker_agent --name worker_us \
+  --broker 127.0.0.1 --data demos/agent2.nml.data &
+./roles/worker/worker_agent --name worker_eu \
+  --broker 127.0.0.1 --data demos/agent3.nml.data &
 
-# Oracle (observes everything, answers questions, votes on data)
-python3 serve/nml_collective.py --name sibyl --port 9004 --seeds http://localhost:9001 --role oracle
+# Oracle (z-score consensus, per-agent confidence weights)
+./roles/oracle/oracle_agent --name sibyl --port 9010 --broker 127.0.0.1 &
 
-# Architect (generates NML programs — requires NML LLM)
-python3 serve/nml_collective.py --name daedalus --port 9005 --seeds http://localhost:9001 --role architect --llm http://localhost:8082
+# Architect (generates NML programs from specs via template engine)
+./roles/architect/architect_agent --name daedalus --port 9005 --broker 127.0.0.1 &
 
-# Enforcer (quarantines bad actors, protects the mesh)
-python3 serve/nml_collective.py --name guardian --port 9006 --seeds http://localhost:9001 --role enforcer
+# Enforcer (identity checks, rate limits, quarantine gossip)
+./roles/enforcer/enforcer_agent --name guardian --broker 127.0.0.1 &
+
+# Emissary (external REST API + webhook delivery)
+./roles/emissary/emissary_agent --name gateway --port 8080 \
+  --broker 127.0.0.1 --api-key secret &
 ```
 
-Submit a program, get consensus:
+Submit a program and check consensus:
 
 ```bash
-curl -X POST http://localhost:9001/submit \
-  -H "Content-Type: application/json" \
-  -d "{\"program\": \"$(cat demos/fraud_detection.nml)\"}"
+# Via Sentient (signs + broadcasts to all workers)
+curl -X POST http://localhost:9001/program \
+  -H "Content-Type: text/plain" \
+  --data-binary @demos/fraud_detection.nml
 
-curl -X POST http://localhost:9001/consensus \
-  -H "Content-Type: application/json" -d '{"strategy":"median"}'
+# Oracle assessment (weighted mean, per-agent confidence)
+curl http://localhost:9010/assessments
+curl http://localhost:9010/agents
 ```
 
-Open the dashboard: http://localhost:9001/dashboard
+Or use the all-in-one demo:
+
+```bash
+bash demos/collective_demo.sh
+```
 
 ## Architecture
 
 ```
-Oracle ──spec──► Architect ──symbolic──► Sentient ──broadcast──► Workers
-  │                                        │                       │
-  │ observes all                           │ signs + nebula         │ execute + VOTE
-  │◄──── events ◄────── gossip mesh ◄──────┼───────────────────────┤
-  │                                        │                       │
-  └──── assessment ────► consensus ◄───────┴───── scores ◄─────────┘
-                                           │
-                              Enforcer ────┘ quarantine + bans
+                        ┌─────────────────┐
+  humans, other         │    Emissary      │  external boundary
+  collectives, APIs ───►│  REST · gateway  │◄─── inter-collective
+                        └────────┬────────┘
+                                 │
+                        ┌────────▼────────┐
+                        │     Herald       │  MQTT broker
+                        │  credentials     │  all internal traffic
+                        │  ACLs · $SYS     │  flows through here
+                        └────────┬────────┘
+           ┌─────────────────────┼─────────────────────┐
+           │                     │                     │
+    ┌──────▼──────┐      ┌───────▼──────┐      ┌──────▼──────┐
+    │   Sentient  │      │    Worker    │      │   Oracle    │
+    │  data+sign  │      │   execute    │      │  consensus  │
+    └─────────────┘      └─────────────┘      └─────────────┘
+           │                                          │
+    ┌──────▼──────┐                          ┌────────▼────┐
+    │  Architect  │                          │  Enforcer   │
+    │   builder   │                          │  immune sys │
+    └─────────────┘                          └─────────────┘
 ```
 
-No single point of failure. Kill any agent and the rest keep running.
+No single point of failure among the agent roles. Kill any agent and the rest keep running. Herald can be clustered for high availability.
 
 ## Agent Roles
 
-| Role | Purpose | Executes | Signs | Votes on Data | LLM |
-|------|---------|----------|-------|---------------|-----|
-| [**Sentient**](docs/ROLE_SENTIENT.md) | Authority — signs programs, approves data, embeds Nebula | Yes | Yes | Yes (authority) | No |
-| [**Worker**](docs/ROLE_WORKER.md) | Compute — executes programs, submits data with context | Yes | No | No | No |
-| [**Oracle**](docs/ROLE_ORACLE.md) | Knowledge — observes all, answers questions, assesses consensus, votes on data | No | No | Yes (analysis) | Optional |
-| [**Architect**](docs/ROLE_ARCHITECT.md) | Builder — generates symbolic NML from specs, validates, ships compact | Dry-run | No | No | Required |
-| [**Enforcer**](docs/ROLE_ENFORCER.md) | Immune system — quarantines nodes, bans, evidence, gossips enforcement | No | No | No | No |
+| Role | Purpose | Signs | Executes | Votes on Data |
+|------|---------|-------|----------|---------------|
+| [**Sentient**](docs/ROLE_SENTIENT.md) | Authority — signs programs, approves data, embeds Nebula | Yes | Yes | Yes (authority) |
+| [**Worker**](docs/ROLE_WORKER.md) | Compute — executes programs, submits data, reports results | No | Yes | No |
+| [**Oracle**](docs/ROLE_ORACLE.md) | Knowledge — observes all, answers questions, assesses consensus | No | No | Yes (analysis) |
+| [**Architect**](docs/ROLE_ARCHITECT.md) | Builder — generates symbolic NML from specs, validates, ships compact | Dry-run | No | No |
+| [**Enforcer**](docs/ROLE_ENFORCER.md) | Immune system — quarantines nodes, bans, evidence, gossips enforcement | No | No | No |
+| [**Herald**](docs/ROLE_HERALD.md) | Mesh infrastructure — MQTT broker, credentials, ACLs, health | No | No | No |
+| [**Emissary**](docs/ROLE_EMISSARY.md) | External boundary — human API, inter-collective federation, ingestion, export | No | No | No |
 
 See the individual role documents in `docs/` for full specifications.
 
 ## Oracle
 
-The Oracle maintains awareness of every agent, tracks all events, reads the Nebula, and answers questions:
+The Oracle collects result votes from all workers, runs z-score outlier detection per program, and maintains per-agent confidence weights via EWMA:
 
 ```bash
-# Ask a question (works without LLM for structured queries)
-curl -X POST http://localhost:9004/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What scores did everyone get?"}'
+# All program assessments (weighted mean, raw mean, confidence, outlier count)
+curl http://localhost:9010/assessments
 
-# Full collective context
-curl http://localhost:9004/context
+# Assessment for a specific program hash
+curl http://localhost:9010/assessments/<phash>
 
-# Recommendations
-curl http://localhost:9004/recommend
+# Per-agent confidence weights and vote history
+curl http://localhost:9010/agents
 
-# Generate a program spec for the Architect
-curl -X POST http://localhost:9004/spec \
-  -H "Content-Type: application/json" \
-  -d '{"intent": "Detect fraud in European transactions"}'
+# Health check
+curl http://localhost:9010/health
 ```
-
-Add `--llm` for open-ended reasoning. Without it, she handles counts, status, scores, agents, events, nebula, consensus, and specific agent lookups.
 
 ## Architect
 
-The Architect generates NML programs in symbolic syntax for minimal packet size:
+The Architect subscribes to `nml/spec` and generates NML programs via a built-in template engine. An optional LLM HTTP backend (`--llm-host`) is used when no template matches:
 
 ```bash
-# Build a program from a spec
-curl -X POST http://localhost:9005/build \
-  -H "Content-Type: application/json" \
-  -d '{"intent": "fraud detection", "features": 6, "architecture": "6→8→1"}'
+# Available templates
+curl http://localhost:9005/templates
 
-# Validate an existing program
-curl -X POST http://localhost:9005/validate \
+# Generate a program from an intent
+curl -X POST http://localhost:9005/generate \
   -H "Content-Type: application/json" \
-  -d '{"program": "↓ κ @w1\n↓ λ @b1\n◼"}'
+  -d '{"intent": "fraud detection on credit card transactions", "features": 6}'
 
-# View built programs
+# View catalog of generated programs
 curl http://localhost:9005/catalog
 ```
 
-Requires `--llm` pointing to the NML-trained model. Validates by dry-run assembly with `nml-crypto`.
-
 ## Enforcer
 
-The Enforcer is the collective's immune system — she quarantines compromised nodes, maintains ban lists, and gossips enforcement actions across the mesh:
+The Enforcer is a MQTT daemon — no HTTP API. It monitors all mesh traffic, verifies Ed25519 node identities, enforces rate limits (20 msg/60s), and detects z-score outliers (threshold 2.5). Enforcement decisions are broadcast as `MSG_ENFORCE` on `nml/enforce`:
+
+- `W` = warning (logged, auto-expires 1h)
+- `Q` = quarantine (temporary isolation, gossiped to all peers)
+- `U` = unquarantine
+- `B` = blacklist (permanent, requires sentient approval via `--approve AGENT`)
+
+Enforcement effects are visible via Oracle's `/agents` — quarantined agents show reduced confidence.
+
+## Herald
+
+The Herald supervises the Mosquitto broker and manages credentials:
 
 ```bash
-# View threat board
-curl http://localhost:9006/threats
+# Health / broker metrics
+curl http://localhost:9000/health
 
-# Quarantine a suspicious node
-curl -X POST http://localhost:9006/quarantine/node \
+# Issue credentials for a new agent
+curl -X POST http://localhost:9000/credentials \
   -H "Content-Type: application/json" \
-  -d '{"agent": "worker_bad", "reason": "suspicious score pattern"}'
+  -d '{"agent": "worker_new", "role": "worker"}'
 
-# Lift quarantine
-curl -X POST http://localhost:9006/quarantine/lift \
-  -H "Content-Type: application/json" -d '{"agent": "worker_bad"}'
-
-# View evidence against a node
-curl "http://localhost:9006/evidence?agent=worker_bad"
+# Revoke credentials
+curl -X DELETE http://localhost:9000/credentials/worker_bad
 ```
 
-Three levels: **warning** (logged, auto-expires) → **quarantine** (temporary isolation, gossips to mesh) → **blacklist** (permanent, requires sentient approval). Enforcers cannot quarantine sentients.
+## Emissary
+
+The Emissary is the external boundary — Bearer token auth, per-IP rate limiting (10 RPS), webhook delivery:
+
+```bash
+# Submit a program from outside the collective
+curl -X POST http://localhost:8080/spec \
+  -H "Authorization: Bearer secret" \
+  -H "Content-Type: application/json" \
+  -d '{"intent": "fraud detection", "features": 6}'
+
+# Get assessment results
+curl -H "Authorization: Bearer secret" http://localhost:8080/results
+
+# Register a webhook (fires on new assessments or enforce events)
+curl -X POST http://localhost:8080/webhooks \
+  -H "Authorization: Bearer secret" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://my-system.example/hook", "events": ["result", "enforce"]}'
+```
 
 ## Nebula (Persistent Storage)
 
@@ -163,94 +210,53 @@ Data submissions carry rich context metadata (description, domain, features, tag
 
 ## Two-Phase VOTE
 
-1. **Phase 1** — Raw scores collected from executing agents (workers + sentients)
-2. **Phase 2** — Oracle assessment: outlier detection (z-score), confidence (high/medium/low), per-agent weights, weighted consensus
+1. **Phase 1** — Workers execute and publish `MSG_RESULT` scores to `nml/result/<phash>`
+2. **Phase 2** — Oracle runs z-score outlier detection, updates per-agent EWMA confidence weights, publishes weighted consensus to `nml/assess/<phash>`
 
 ```bash
-curl -X POST http://localhost:9001/consensus \
-  -H "Content-Type: application/json" -d '{"strategy":"median"}'
-# Returns: raw_consensus, consensus (weighted), assessment, weights
+# Oracle weighted assessment
+curl http://localhost:9010/assessments/<phash>
+# Returns: raw_mean, weighted_mean, confidence, vote_count, outlier_count
 ```
 
-## Discovery
+## Transport
 
-| Method | Scope | Config |
-|--------|-------|--------|
-| UDP multicast | Same subnet | `239.78.77.76:7776`, zero-config |
-| mDNS/Bonjour | LAN | `_nml._tcp.local.`, zero-config |
-| WebSocket relay | WAN | `--relay ws://host:7777/ws` |
-| HTTP seeds | Any | `--seeds http://host:port` |
+| Method | Scope | Role |
+|--------|-------|------|
+| MQTT | LAN + WAN | Herald broker, all agent-to-agent traffic |
+| MQTT retained | LAN + WAN | Presence announcements — new joiners see current peers immediately |
+| MQTT Last Will | LAN + WAN | Automatic departure announcements on ungraceful disconnect |
+| REST/HTTP | External | Emissary only — human and inter-collective interface |
+
+## C99 Implementation
+
+All eight roles are implemented in C99 and run on Linux x86_64, ARM Cortex-M4, and other embedded targets. Built from `edge/libcollective.a` (shared library) and `roles/` (one binary per role):
+
+```bash
+make                         # libcollective.a + all 8 role binaries
+make -C roles/worker         # single role
+make -C edge arm             # cross-compile for ARM Cortex-M4
+```
+
+Binary sizes on ARM Cortex-M4 (with MQTT): ~52KB flash, ~20KB RAM for worker.
+
+See [plans/C99_EDGE_WORKER.md](plans/C99_EDGE_WORKER.md) for platform targets and implementation details.
 
 ## Demos
 
 ```bash
-# 3 agents + fraud detection + consensus
-bash demos/collective_demo.sh
+# Full collective — all 8 roles, complete pipeline
+bash demos/demo.sh
+bash demos/demo.sh --llm-host=http://localhost:8082   # with LLM for Architect
 
-# Sentient + workers + oracle + Q&A
-bash demos/oracle_demo.sh
-
-# Full pipeline: Oracle → Architect → Sentient → Workers → VOTE
-bash demos/architect_demo.sh --llm=http://localhost:8082
-
-# Enforcer quarantines bad actor, excluded from VOTE
-bash demos/enforcer_demo.sh
-
-# Sign + distribute + train + vote + patch
+# nml-crypto standalone — sign + distribute + train + VOTE + patch (no broker)
 bash demos/distributed_fraud.sh
+
+# Start a single agent manually
+bash demos/agent.sh worker   --name w_1    --data demos/agent1.nml.data
+bash demos/agent.sh oracle   --name sibyl  --port 9010
+bash demos/agent.sh enforcer --name guard
 ```
-
-## Endpoints
-
-**All agents:**
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/health` | GET | Agent status |
-| `/peers` | GET | Current peer list |
-| `/peer/join` | POST | Accept new peer (includes role) |
-| `/broadcast` | POST | Receive a program |
-| `/submit` | POST | Submit a program (broadcasts to all) |
-| `/results` | GET | Execution results |
-| `/consensus` | POST | Two-phase VOTE across fleet |
-| `/state` | GET | Full agent state |
-| `/ws` | GET | WebSocket real-time updates |
-| `/dashboard` | GET | Role-specific web dashboard |
-| `/discover` | GET | All known agent URLs |
-| `/data/submit` | POST | Submit data to quarantine (with context) |
-| `/data/approve` | POST | Approve quarantined data (sentient/oracle) |
-| `/data/reject` | POST | Reject quarantined data (sentient/oracle) |
-
-**Oracle only:**
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/ask` | POST | Natural language question |
-| `/context` | GET | Full collective awareness |
-| `/explain` | GET | Explain a hash (program/data/consensus) |
-| `/recommend` | GET | Recommendations |
-| `/assess` | POST | Assess consensus scores |
-| `/spec` | POST | Generate program spec for Architect |
-
-**Architect only:**
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/build` | POST | Build NML from spec |
-| `/validate` | POST | Validate NML program |
-| `/catalog` | GET | Built programs |
-
-**Enforcer only:**
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/threats` | GET | Full threat board |
-| `/quarantine/node` | POST | Quarantine a node |
-| `/quarantine/lift` | POST | Lift quarantine (enforcer/sentient) |
-| `/blacklist` | POST | Propose permanent blacklist |
-| `/blacklist/approve` | POST | Approve blacklist (sentient only) |
-| `/evidence` | GET | Evidence log for a node |
-| `/enforce/receive` | POST | Receive enforcement gossip |
 
 ## Documentation
 
@@ -264,10 +270,12 @@ bash demos/distributed_fraud.sh
 | [ROLE_ORACLE.md](docs/ROLE_ORACLE.md) | Oracle role specification |
 | [ROLE_ARCHITECT.md](docs/ROLE_ARCHITECT.md) | Architect role specification |
 | [ROLE_ENFORCER.md](docs/ROLE_ENFORCER.md) | Enforcer role specification |
+| [ROLE_HERALD.md](docs/ROLE_HERALD.md) | Herald role specification |
+| [ROLE_EMISSARY.md](docs/ROLE_EMISSARY.md) | Emissary role specification |
 
 ## Dependencies
 
-- [NML](https://github.com/dnamaz/nml) runtime (`nml-crypto` binary)
-- Python 3.10+
-- `aiohttp` (`pip install aiohttp`)
-- `zeroconf` (`pip install zeroconf`) — optional, for mDNS discovery
+- [NML](https://github.com/dnamaz/nml) runtime (C source — included via `nml_exec.c`)
+- Mosquitto (MQTT broker — managed by Herald)
+- GCC (C99) or `arm-none-eabi-gcc` for ARM cross-compilation
+- `nml-crypto` binary — only for `demos/distributed_fraud.sh` (signing tool)

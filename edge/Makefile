@@ -1,11 +1,12 @@
-# NML Edge Worker — Makefile
+# NML Edge — Base library Makefile
 #
 # Targets:
-#   make                   Build edge_worker + libcollective.a + role agents (default)
-#   make libcollective.a   Build shared C library only
-#   make roles             Build all role agent binaries in roles/
+#   make                   Build libcollective.a (default)
+#   make edge_worker       Build standalone edge_worker binary (reference/legacy)
 #   make arm               Cross-compile for ARM Cortex-M4 → libnml_edge_arm_m4.a
 #   make clean             Remove build artifacts
+#
+# Role agents are built from roles/<role>/Makefile — each links libcollective.a.
 #
 # Overrides (via environment or command line):
 #   CC=arm-none-eabi-gcc         Cross-compile for ARM bare metal
@@ -28,10 +29,11 @@ NML_SRC := ../../nml/runtime
 NML_MAX_TENSOR_SIZE ?= 1048576
 
 CFLAGS := -std=c99 -O2 -Wall -Wextra \
+          -D_GNU_SOURCE \
           -DNML_MAX_TENSOR_SIZE=$(NML_MAX_TENSOR_SIZE) \
-          -I.
+          -I. -Imqtt
 
-# Suppress warnings from the vendored NML runtime
+# Suppress warnings from vendored code (NML runtime, MQTT-C)
 NML_CFLAGS := $(CFLAGS) -w
 
 # Optional agent name override
@@ -58,24 +60,23 @@ ALL_OBJS := $(EDGE_OBJS) $(NML_EXEC_OBJ) $(TWEETNACL_OBJ)
 # modules (peer_table, vote, program_send).  Role binaries link against this.
 
 COLLECTIVE_SRCS := udp.c msg.c crypto.c report.c identity.c \
-                   peer_table.c vote.c program_send.c
+                   peer_table.c vote.c program_send.c http_client.c \
+                   templates.c mqtt_transport.c storage.c
 COLLECTIVE_OBJS := $(COLLECTIVE_SRCS:.c=.o)
 
-# libcollective_all_objs includes the NML exec object and tweetnacl
-COLLECTIVE_ALL_OBJS := $(COLLECTIVE_OBJS) $(NML_EXEC_OBJ) $(TWEETNACL_OBJ)
+# Vendored MQTT-C library (MIT license)
+MQTT_OBJS := mqtt/mqtt.o mqtt/mqtt_pal.o
 
-# ── Role agent sources ─────────────────────────────────────────────────────
-
-ROLE_SRCS   := roles/worker_agent.c
-ROLE_BINS   := $(ROLE_SRCS:.c=)
+# libcollective_all_objs includes the NML exec object, tweetnacl, and MQTT-C
+COLLECTIVE_ALL_OBJS := $(COLLECTIVE_OBJS) $(MQTT_OBJS) $(NML_EXEC_OBJ) $(TWEETNACL_OBJ)
 
 # ── Rules ─────────────────────────────────────────────────────────────────
 
-.PHONY: all arm clean roles
+.PHONY: all arm clean edge_worker
 
-all: $(TARGET) libcollective.a roles
+all: libcollective.a
 
-$(TARGET): $(ALL_OBJS)
+edge_worker: $(ALL_OBJS)
 	$(CC) -o $@ $^ -lm
 
 # ── libcollective.a ────────────────────────────────────────────────────────
@@ -91,13 +92,6 @@ program_send.o: program_send.c program_send.h msg.h udp.h config.h
 # peer_table and vote have no special flags
 peer_table.o: peer_table.c peer_table.h
 vote.o: vote.c vote.h
-
-# ── Role agent binaries ────────────────────────────────────────────────────
-
-roles: $(ROLE_BINS)
-
-roles/worker_agent: roles/worker_agent.c libcollective.a
-	$(CC) $(CFLAGS) -o $@ $< libcollective.a -lm
 
 # nml_exec.c: include nml.c as a library; suppress vendor warnings with -w
 nml_exec.o: nml_exec.c nml_exec.h config.h
@@ -228,7 +222,22 @@ $(ARM_PLAT)/posix_stubs.arm.o: $(ARM_PLAT)/posix_stubs.c
 $(ARM_PLAT)/entry.arm.o: $(ARM_PLAT)/entry.c
 	$(ARM_CC) $(ARM_CFLAGS) -w -c -o $@ $<
 
+# mqtt_transport.c: uses MQTT-C library
+mqtt_transport.o: mqtt_transport.c mqtt_transport.h mqtt/mqtt.h msg.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# storage.c: uses nml_crypto.h for SHA-256
+storage.o: storage.c storage.h
+	$(CC) $(CFLAGS) -Wno-unused-function -c -o $@ $<
+
+# Vendored MQTT-C (suppress all warnings)
+mqtt/mqtt.o: mqtt/mqtt.c mqtt/mqtt.h mqtt/mqtt_pal.h
+	$(CC) $(NML_CFLAGS) -c -o $@ $<
+
+mqtt/mqtt_pal.o: mqtt/mqtt_pal.c mqtt/mqtt_pal.h
+	$(CC) $(NML_CFLAGS) -c -o $@ $<
+
 clean:
-	rm -f $(EDGE_OBJS) $(NML_EXEC_OBJ) $(TWEETNACL_OBJ) $(TARGET)
-	rm -f $(COLLECTIVE_OBJS) libcollective.a $(ROLE_BINS)
+	rm -f $(EDGE_OBJS) $(NML_EXEC_OBJ) $(TWEETNACL_OBJ) edge_worker
+	rm -f $(COLLECTIVE_OBJS) $(MQTT_OBJS) libcollective.a
 	rm -f $(ARM_ALL_OBJS) $(ARM_TARGET)

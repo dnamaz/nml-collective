@@ -28,7 +28,9 @@ int udp_send(UDPContext *ctx, const char *mcast_group, uint16_t port,
              const uint8_t *buf, size_t len);
 
 /* Receive with timeout_ms (-1 = block forever).
+   Writes sender IPv4 address string into sender_ip_out if non-NULL (must be >= 46 bytes).
    Returns bytes received, 0 on timeout, -1 on error. */
-int udp_recv(UDPContext *ctx, uint8_t *buf, size_t buf_sz, int timeout_ms);
+int udp_recv(UDPContext *ctx, uint8_t *buf, size_t buf_sz, int timeout_ms,
+             char *sender_ip_out);
 
 #endif /* EDGE_UDP_H */

@@ -18,6 +18,8 @@
 
 typedef struct {
     char     name[64];
+    char     ip[46];               /* sender IPv4/IPv6 string, "" if unknown */
+    char     role[16];             /* "worker", "sentient", etc., or "" */
     uint16_t port;
     char     identity_payload[34]; /* "<mhash16>:<nid16>\0" or "" */
     time_t   last_seen;
@@ -39,8 +41,14 @@ void peer_table_init(PeerTable *t);
  * Returns a pointer to the entry, or NULL if the table is full and the peer
  * is not already present.
  */
-PeerEntry *peer_upsert(PeerTable *t, const char *name, uint16_t port,
-                       const char *identity, time_t now);
+/*
+ * Add or refresh a peer.  Updates ip, port, identity, and last_seen on revisit.
+ * ip may be NULL or "" if the sender address is not known.
+ * Returns a pointer to the entry, or NULL if the table is full and the peer
+ * is not already present.
+ */
+PeerEntry *peer_upsert(PeerTable *t, const char *name, const char *ip,
+                       uint16_t port, const char *identity, time_t now);
 
 /* Look up by name.  Returns NULL if not found / inactive. */
 PeerEntry *peer_get(PeerTable *t, const char *name);

@@ -27,6 +27,10 @@
 #define MSG_PROGRAM   2
 #define MSG_RESULT    3
 #define MSG_HEARTBEAT 4
+/* C-collective extension: enforcement gossip (type 5 ignored by Python agents) */
+#define MSG_ENFORCE   5
+/* Oracle → Architect program specification (type 6 ignored by Python agents) */
+#define MSG_SPEC      6
 
 /* Minimum valid packet: magic(4)+type(1)+name_len(1)+port(2) */
 #define MSG_HEADER_MIN 8

@@ -7,1497 +7,1039 @@
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace; background: #05080f; color: #c9d1d9; min-height: 100vh; overflow: hidden; }
-.header { position: fixed; top: 0; left: 0; right: 0; z-index: 10; background: rgba(5,8,15,0.85); backdrop-filter: blur(12px); border-bottom: 1px solid rgba(88,166,255,0.15); padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; }
-.header h1 { font-size: 16px; color: #58a6ff; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; }
-.header .status { font-size: 12px; color: #8b949e; }
-.header .status .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #3fb950; margin-right: 5px; box-shadow: 0 0 8px #3fb950; animation: pulse 2s infinite; }
-@keyframes pulse { 0%,100% { opacity: 1; box-shadow: 0 0 8px #3fb950; } 50% { opacity: 0.4; box-shadow: 0 0 2px #3fb950; } }
+
+/* ── Header ── */
+.header { position: fixed; top: 0; left: 0; right: 0; z-index: 10; background: rgba(5,8,15,0.9); backdrop-filter: blur(12px); border-bottom: 1px solid rgba(88,166,255,0.15); padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.header h1 { font-size: 15px; color: #58a6ff; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; white-space: nowrap; }
+.config-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.config-bar label { font-size: 10px; color: #6e7681; }
+.config-bar input[type=text], .config-bar input[type=number] { background: rgba(13,17,23,0.8); border: 1px solid #30363d; border-radius: 3px; color: #c9d1d9; font-family: inherit; font-size: 10px; padding: 3px 6px; width: 80px; }
+.config-bar input[name=host] { width: 110px; }
+.config-bar input:focus { outline: none; border-color: #58a6ff; }
+.config-bar button { background: #1f6feb; border: none; border-radius: 3px; color: #fff; font-family: inherit; font-size: 10px; padding: 3px 10px; cursor: pointer; }
+.config-bar button:hover { background: #388bfd; }
+.status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #484f58; margin-right: 5px; }
+.status-dot.live { background: #3fb950; box-shadow: 0 0 6px #3fb950; animation: pulse 2s infinite; }
+.status-dot.error { background: #f85149; }
+#statusText { font-size: 11px; color: #8b949e; white-space: nowrap; }
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.4} }
+
+/* ── Canvas + Layout ── */
 canvas#nebula { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 0; }
-.sidebar { position: fixed; top: 48px; right: 0; width: 340px; height: calc(100vh - 48px); z-index: 5; background: rgba(10,14,23,0.88); backdrop-filter: blur(12px); border-left: 1px solid rgba(88,166,255,0.12); overflow-y: auto; padding: 16px; }
-.sidebar h2 { font-size: 11px; color: #58a6ff; text-transform: uppercase; letter-spacing: 2px; margin: 16px 0 8px; }
+
+/* ── Sidebar ── */
+.sidebar { position: fixed; top: 50px; right: 0; width: 340px; height: calc(100vh - 50px); z-index: 5; background: rgba(10,14,23,0.9); backdrop-filter: blur(12px); border-left: 1px solid rgba(88,166,255,0.12); overflow-y: auto; padding: 14px; }
+.sidebar h2 { font-size: 10px; color: #58a6ff; text-transform: uppercase; letter-spacing: 2px; margin: 16px 0 7px; }
 .sidebar h2:first-child { margin-top: 0; }
-.agent-card { background: rgba(13,17,23,0.7); border: 1px solid rgba(48,54,61,0.6); border-radius: 6px; padding: 10px; margin-bottom: 6px; }
+
+/* ── Agent Cards ── */
+.agent-card { background: rgba(13,17,23,0.7); border: 1px solid rgba(48,54,61,0.6); border-radius: 5px; padding: 9px 10px; margin-bottom: 5px; cursor: pointer; transition: border-color 0.15s; }
+.agent-card:hover { border-color: rgba(88,166,255,0.35); }
+.agent-card.selected { border-color: rgba(88,166,255,0.6); }
 .agent-card .name { font-size: 13px; font-weight: 600; color: #f0f6fc; }
-.agent-card .meta { font-size: 10px; color: #6e7681; margin-top: 3px; }
-.agent-card .score { font-size: 15px; font-weight: 700; margin-top: 4px; }
+.agent-card .meta { font-size: 10px; color: #6e7681; margin-top: 2px; }
+.agent-card .score { font-size: 14px; font-weight: 700; margin-top: 3px; }
 .agent-card .score.high { color: #f85149; }
 .agent-card .score.low { color: #3fb950; }
-.event-item { font-size: 10px; padding: 4px 0; border-bottom: 1px solid rgba(33,38,45,0.5); display: flex; gap: 6px; }
-.event-item .time { color: #484f58; min-width: 48px; }
-.event-item .type { font-weight: 600; min-width: 100px; }
-.event-item .type.program_received { color: #d2a8ff; }
-.event-item .type.program_executed { color: #3fb950; }
-.event-item .type.peer_discovered, .event-item .type.udp_peer, .event-item .type.mdns_discovered { color: #58a6ff; }
-.event-item .type.peer_lost, .event-item .type.mdns_stale { color: #f85149; }
-.event-item .type.udp_broadcast, .event-item .type.udp_program { color: #d29922; }
-.event-item .detail { color: #6e7681; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.consensus-bar { background: rgba(13,17,23,0.7); border: 1px solid rgba(210,168,255,0.3); border-radius: 6px; padding: 10px; margin-top: 8px; }
-.consensus-bar .label { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; }
-.consensus-bar .value { font-size: 22px; font-weight: 700; color: #d2a8ff; margin-top: 2px; }
-.consensus-bar .raw-value { font-size: 12px; color: #484f58; margin-top: 2px; }
-.consensus-bar .strategy { font-size: 10px; color: #484f58; }
-.confidence-badge { display: inline-block; font-size: 9px; padding: 1px 6px; border-radius: 3px; margin-left: 6px; font-weight: 600; }
-.confidence-badge.high { background: rgba(63,185,80,0.2); color: #3fb950; }
-.confidence-badge.medium { background: rgba(210,153,34,0.2); color: #d29922; }
-.confidence-badge.low { background: rgba(248,81,73,0.2); color: #f85149; }
-.consensus-assessment { font-size: 10px; color: #6e7681; margin-top: 4px; line-height: 1.4; }
-.consensus-outlier { font-size: 10px; color: #f85149; margin-top: 2px; }
-.consensus-weights { font-size: 10px; color: #8b949e; margin-top: 4px; }
-.nebula-stat { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; color: #8b949e; }
-.nebula-stat .val { color: #d2a8ff; font-weight: 600; }
-.quarantine-item { background: rgba(210,168,255,0.08); border: 1px solid rgba(210,168,255,0.2); border-radius: 4px; padding: 6px 8px; margin-top: 4px; font-size: 10px; }
-.quarantine-item .q-name { color: #d2a8ff; font-weight: 600; }
-.quarantine-item .q-meta { color: #6e7681; }
-.quarantine-item .q-approve { background: #238636; border: none; color: #fff; padding: 2px 8px; border-radius: 3px; font-size: 9px; cursor: pointer; margin-left: 4px; }
-.quarantine-item .q-reject { background: #da3633; border: none; color: #fff; padding: 2px 8px; border-radius: 3px; font-size: 9px; cursor: pointer; margin-left: 4px; }
-.role-badge { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-left: 6px; }
-.role-badge.sentient { background: rgba(210,168,255,0.2); color: #d2a8ff; }
-.role-badge.worker { background: rgba(63,185,80,0.2); color: #3fb950; }
-.role-badge.oracle { background: rgba(210,153,34,0.2); color: #d29922; }
-.role-badge.architect { background: rgba(56,173,169,0.2); color: #38ada9; }
-.role-badge.enforcer { background: rgba(218,54,51,0.2); color: #da3633; }
-.threat-item { background: rgba(218,54,51,0.06); border: 1px solid rgba(218,54,51,0.2); border-radius: 4px; padding: 6px 8px; margin-top: 4px; font-size: 10px; }
-.threat-item .thr-name { font-weight: 600; }
-.threat-item .thr-name.warning { color: #d29922; }
-.threat-item .thr-name.quarantined { color: #f85149; }
-.threat-item .thr-name.blacklisted { color: #da3633; }
-.threat-item .thr-meta { color: #6e7681; }
-.threat-item button { border: none; padding: 2px 8px; border-radius: 3px; font-size: 9px; cursor: pointer; margin-left: 4px; }
-.threat-item .thr-lift { background: #238636; color: #fff; }
-.threat-item .thr-quarantine { background: #da3633; color: #fff; }
-.enforcer-stat { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; color: #8b949e; }
-.enforcer-stat .val { color: #da3633; font-weight: 600; }
-.enforcer-stat .val.clear { color: #3fb950; }
-.architect-stat { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; color: #8b949e; }
-.architect-stat .val { color: #38ada9; font-weight: 600; }
-.catalog-item { background: rgba(56,173,169,0.08); border: 1px solid rgba(56,173,169,0.2); border-radius: 4px; padding: 6px 8px; margin-top: 4px; font-size: 10px; }
-.catalog-item .cat-hash { color: #38ada9; font-weight: 600; }
-.catalog-item .cat-meta { color: #6e7681; }
-.catalog-item .cat-valid { color: #3fb950; }
-.catalog-item .cat-invalid { color: #f85149; }
-.oracle-panel { margin-top: 8px; }
-.oracle-panel .oracle-input-row { display: flex; gap: 4px; margin-top: 6px; }
-.oracle-panel .oracle-input-row input { flex: 1; background: rgba(13,17,23,0.8); border: 1px solid #30363d; border-radius: 4px; padding: 6px 8px; color: #c9d1d9; font-family: inherit; font-size: 11px; }
-.oracle-panel .oracle-input-row input:focus { outline: none; border-color: #d29922; }
-.oracle-panel .oracle-input-row button { background: #7c4d12; border: none; border-radius: 4px; padding: 6px 10px; color: #fff; font-family: inherit; font-size: 10px; cursor: pointer; font-weight: 600; white-space: nowrap; }
-.oracle-panel .oracle-input-row button:hover { background: #9e6215; }
-.oracle-answer { background: rgba(210,153,34,0.08); border: 1px solid rgba(210,153,34,0.2); border-radius: 4px; padding: 8px; margin-top: 6px; font-size: 11px; color: #c9d1d9; white-space: pre-wrap; word-wrap: break-word; max-height: 200px; overflow-y: auto; line-height: 1.5; }
-.oracle-answer .llm-tag { font-size: 9px; color: #d29922; margin-bottom: 4px; }
-.oracle-stat { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; color: #8b949e; }
-.oracle-stat .val { color: #d29922; font-weight: 600; }
-.oracle-recommend { background: rgba(210,153,34,0.06); border: 1px solid rgba(210,153,34,0.15); border-radius: 4px; padding: 6px 8px; margin-top: 4px; font-size: 10px; }
-.oracle-recommend .rec-severity { font-weight: 600; margin-right: 4px; }
-.oracle-recommend .rec-severity.warning { color: #d29922; }
-.oracle-recommend .rec-severity.action { color: #f85149; }
-.oracle-recommend .rec-severity.info { color: #58a6ff; }
-.oracle-recommend .rec-category { color: #6e7681; font-size: 9px; }
-.worker-results { background: rgba(13,17,23,0.7); border: 1px solid rgba(63,185,80,0.3); border-radius: 6px; padding: 10px; margin-top: 8px; }
-.worker-results .wr-label { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; }
-.worker-results .wr-score { font-size: 22px; font-weight: 700; color: #3fb950; margin-top: 2px; }
-.worker-results .wr-hash { font-size: 10px; color: #484f58; }
-.data-submit-form { margin-top: 8px; }
-.data-submit-form input, .data-submit-form textarea { width: 100%; background: rgba(13,17,23,0.8); border: 1px solid #30363d; border-radius: 4px; padding: 6px 8px; color: #c9d1d9; font-family: inherit; font-size: 11px; margin-top: 4px; }
-.data-submit-form textarea { min-height: 50px; resize: vertical; }
-.data-submit-form input:focus, .data-submit-form textarea:focus { outline: none; border-color: #3fb950; }
-.data-submit-form button { background: #238636; border: none; border-radius: 4px; padding: 5px 12px; color: #fff; font-family: inherit; font-size: 10px; cursor: pointer; font-weight: 600; margin-top: 4px; }
-.data-submit-form button:hover { background: #2ea043; }
-.section-hidden { display: none !important; }
-.role-header-badge { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 3px; margin-left: 8px; vertical-align: middle; }
-.role-header-badge.sentient { background: rgba(210,168,255,0.15); color: #d2a8ff; }
-.role-header-badge.worker { background: rgba(63,185,80,0.15); color: #3fb950; }
-.role-header-badge.oracle { background: rgba(210,153,34,0.15); color: #d29922; }
-.role-header-badge.architect { background: rgba(56,173,169,0.15); color: #38ada9; }
-.role-header-badge.enforcer { background: rgba(218,54,51,0.15); color: #da3633; }
-.bottom-bar { position: fixed; bottom: 0; left: 0; right: 340px; z-index: 5; background: rgba(5,8,15,0.85); backdrop-filter: blur(12px); border-top: 1px solid rgba(88,166,255,0.12); padding: 10px 24px; display: flex; gap: 8px; justify-content: flex-end; }
-.bottom-bar button { background: #238636; border: none; border-radius: 6px; padding: 8px 16px; color: #fff; font-family: inherit; font-size: 11px; cursor: pointer; font-weight: 600; }
-.bottom-bar button:hover { background: #2ea043; }
-.focus-panel { position: fixed; top: 48px; left: 0; width: 320px; height: calc(100vh - 48px); z-index: 6; background: rgba(10,14,23,0.92); backdrop-filter: blur(14px); border-right: 1px solid rgba(88,166,255,0.12); overflow-y: auto; padding: 16px; transform: translateX(-100%); transition: transform 0.3s ease; }
+.agent-card .score.na { color: #484f58; }
+
+/* ── Role Badges ── */
+.role-badge { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-left: 5px; font-weight: 600; }
+.role-badge.sentient  { background: rgba(210,168,255,0.2); color: #d2a8ff; }
+.role-badge.worker    { background: rgba(63,185,80,0.2);   color: #3fb950; }
+.role-badge.oracle    { background: rgba(210,153,34,0.2);  color: #d29922; }
+.role-badge.architect { background: rgba(56,173,169,0.2);  color: #38ada9; }
+.role-badge.enforcer  { background: rgba(218,54,51,0.2);   color: #da3633; }
+.role-badge.custodian { background: rgba(88,166,255,0.2);  color: #58a6ff; }
+.role-badge.herald    { background: rgba(140,110,255,0.2); color: #a78bfa; }
+.role-badge.emissary  { background: rgba(255,170,70,0.2);  color: #faa946; }
+.role-badge.offline   { background: rgba(72,79,88,0.3);    color: #484f58; }
+
+/* ── Assessment Table ── */
+.assess-row { display: flex; justify-content: space-between; align-items: center; font-size: 10px; padding: 5px 0; border-bottom: 1px solid rgba(33,38,45,0.5); gap: 6px; }
+.assess-row .phash { color: #58a6ff; font-size: 9px; flex: 0 0 auto; cursor: pointer; }
+.assess-row .phash:hover { text-decoration: underline; }
+.assess-row .score { font-weight: 700; flex: 0 0 auto; }
+.assess-row .score.high { color: #f85149; }
+.assess-row .score.low { color: #3fb950; }
+.assess-row .conf { color: #8b949e; font-size: 9px; flex: 0 0 auto; }
+.assess-row .voters { color: #484f58; font-size: 9px; flex: 0 0 auto; }
+.assess-header { display: flex; justify-content: space-between; font-size: 9px; color: #484f58; text-transform: uppercase; letter-spacing: 1px; padding-bottom: 3px; border-bottom: 1px solid rgba(33,38,45,0.5); }
+
+/* ── Confidence Bars ── */
+.conf-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; font-size: 10px; }
+.conf-row .cname { color: #c9d1d9; flex: 0 0 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conf-bar-track { flex: 1; height: 5px; background: rgba(33,38,45,0.8); border-radius: 3px; overflow: hidden; }
+.conf-bar-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #3fb950, #d29922); transition: width 0.5s; }
+.conf-val { color: #8b949e; font-size: 9px; flex: 0 0 32px; text-align: right; }
+.conf-out { color: #f85149; font-size: 9px; flex: 0 0 auto; }
+
+/* ── Data items (pool, quarantine) ── */
+.data-item { background: rgba(13,17,23,0.6); border: 1px solid rgba(48,54,61,0.4); border-radius: 4px; padding: 6px 8px; margin-top: 4px; font-size: 10px; }
+.data-item .di-name { font-weight: 600; color: #c9d1d9; }
+.data-item .di-meta { color: #6e7681; margin-top: 2px; }
+.data-item .di-status { font-size: 9px; font-weight: 600; margin-left: 5px; }
+.data-item .di-status.approved { color: #3fb950; }
+.data-item .di-status.pending  { color: #d29922; }
+.data-item .di-status.rejected { color: #f85149; }
+.data-item .di-actions { margin-top: 5px; display: flex; gap: 4px; }
+.btn-approve { background: #238636; border: none; color: #fff; padding: 2px 8px; border-radius: 3px; font-size: 9px; cursor: pointer; font-family: inherit; }
+.btn-reject  { background: #da3633; border: none; color: #fff; padding: 2px 8px; border-radius: 3px; font-size: 9px; cursor: pointer; font-family: inherit; }
+.btn-approve:hover { background: #2ea043; }
+.btn-reject:hover  { background: #b91c1c; }
+
+/* ── Architect ── */
+.arch-stat { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; color: #8b949e; }
+.arch-stat .val { color: #38ada9; font-weight: 600; }
+.catalog-item { background: rgba(56,173,169,0.07); border: 1px solid rgba(56,173,169,0.2); border-radius: 4px; padding: 6px 8px; margin-top: 4px; font-size: 10px; }
+.catalog-item .ci-hash { color: #38ada9; font-weight: 600; }
+.catalog-item .ci-spec { color: #8b949e; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catalog-item .ci-prov { color: #484f58; font-size: 9px; }
+.catalog-item .ci-valid { color: #3fb950; font-size: 9px; }
+.catalog-item .ci-invalid { color: #f85149; font-size: 9px; }
+.generate-form { margin-top: 6px; }
+.generate-form textarea { width: 100%; background: rgba(13,17,23,0.8); border: 1px solid #30363d; border-radius: 4px; padding: 6px 8px; color: #c9d1d9; font-family: inherit; font-size: 10px; resize: vertical; min-height: 50px; }
+.generate-form textarea:focus { outline: none; border-color: #38ada9; }
+.generate-form button { background: #1f6f5a; border: none; border-radius: 4px; padding: 4px 12px; color: #fff; font-family: inherit; font-size: 10px; cursor: pointer; margin-top: 4px; font-weight: 600; }
+.generate-form button:hover { background: #26a876; }
+.generate-result { font-size: 10px; margin-top: 4px; color: #3fb950; }
+
+/* ── Stat rows ── */
+.stat-row { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; color: #8b949e; }
+.stat-row .val { color: #c9d1d9; font-weight: 600; }
+.stat-row .val.warn { color: #d29922; }
+.stat-row .val.ok { color: #3fb950; }
+.stat-row .val.err { color: #f85149; }
+
+/* ── Event log ── */
+.ev-item { font-size: 10px; padding: 3px 0; border-bottom: 1px solid rgba(33,38,45,0.4); display: flex; gap: 6px; }
+.ev-item .ev-t { color: #484f58; min-width: 52px; }
+.ev-item .ev-src { font-weight: 600; min-width: 72px; }
+.ev-item .ev-src.sentient { color: #d2a8ff; }
+.ev-item .ev-src.oracle { color: #d29922; }
+.ev-item .ev-src.architect { color: #38ada9; }
+.ev-item .ev-src.custodian { color: #58a6ff; }
+.ev-item .ev-src.system { color: #6e7681; }
+.ev-item .ev-msg { color: #6e7681; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Focus panel ── */
+.focus-panel { position: fixed; top: 50px; left: 0; width: 300px; height: calc(100vh - 50px); z-index: 6; background: rgba(10,14,23,0.94); backdrop-filter: blur(14px); border-right: 1px solid rgba(88,166,255,0.12); overflow-y: auto; padding: 16px; transform: translateX(-100%); transition: transform 0.28s ease; }
 .focus-panel.open { transform: translateX(0); }
-.focus-panel h2 { font-size: 11px; color: #58a6ff; text-transform: uppercase; letter-spacing: 2px; margin: 14px 0 6px; }
+.fp-close { position: absolute; top: 12px; right: 12px; background: none; border: 1px solid rgba(88,166,255,0.2); border-radius: 4px; color: #8b949e; font-size: 14px; width: 26px; height: 26px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.fp-close:hover { color: #f0f6fc; border-color: rgba(88,166,255,0.4); }
+.fp-name { font-size: 18px; font-weight: 700; color: #f0f6fc; }
+.focus-panel h2 { font-size: 10px; color: #58a6ff; text-transform: uppercase; letter-spacing: 2px; margin: 14px 0 5px; }
 .focus-panel h2:first-child { margin-top: 0; }
-.focus-panel .fp-name { font-size: 18px; font-weight: 700; color: #f0f6fc; }
-.focus-panel .fp-close { position: absolute; top: 12px; right: 12px; background: none; border: 1px solid rgba(88,166,255,0.2); border-radius: 4px; color: #8b949e; font-size: 14px; width: 26px; height: 26px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-.focus-panel .fp-close:hover { color: #f0f6fc; border-color: rgba(88,166,255,0.4); }
-.fp-detail { font-size: 11px; padding: 3px 0; color: #8b949e; display: flex; justify-content: space-between; }
-.fp-detail .val { color: #c9d1d9; font-weight: 600; }
-.fp-score-big { font-size: 28px; font-weight: 700; margin: 8px 0; }
-.fp-peers-list { font-size: 10px; color: #6e7681; }
-.fp-peers-list span { color: #58a6ff; cursor: pointer; }
-.fp-peers-list span:hover { text-decoration: underline; }
-.fp-event { font-size: 10px; padding: 3px 0; border-bottom: 1px solid rgba(33,38,45,0.4); color: #6e7681; }
-.fp-section { margin-top: 10px; }
-.fp-check { font-size: 10px; padding: 2px 0; }
-.fp-check.pass { color: #3fb950; }
-.fp-check.fail { color: #f85149; }
-.fp-tag { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-right: 4px; margin-top: 2px; background: rgba(88,166,255,0.1); color: #58a6ff; }
-.fp-vote { font-size: 10px; padding: 4px 0; border-bottom: 1px solid rgba(33,38,45,0.3); }
-.fp-vote .vote-approve { color: #3fb950; }
-.fp-vote .vote-reject { color: #f85149; }
-.fp-evidence-item { font-size: 10px; padding: 3px 0; border-bottom: 1px solid rgba(33,38,45,0.3); color: #8b949e; }
-.fp-evidence-item .ev-type { color: #f85149; font-weight: 600; margin-right: 4px; }
-.fp-clickable { cursor: pointer; transition: border-color 0.15s; }
-.fp-clickable:hover { border-color: rgba(88,166,255,0.4) !important; }
+.fp-row { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; color: #8b949e; }
+.fp-row .val { color: #c9d1d9; font-weight: 600; }
+.fp-vote-list { font-size: 10px; }
+.fp-vote { display: flex; justify-content: space-between; padding: 2px 0; border-bottom: 1px solid rgba(33,38,45,0.3); }
+.fp-vote .vname { color: #c9d1d9; }
+.fp-vote .vscore { font-weight: 700; }
+.fp-vote .vscore.outlier { color: #f85149; }
+.fp-vote .vscore.normal { color: #3fb950; }
+
+/* ── Bottom bar ── */
+.bottom-bar { position: fixed; bottom: 0; left: 0; right: 340px; z-index: 5; background: rgba(5,8,15,0.9); backdrop-filter: blur(12px); border-top: 1px solid rgba(88,166,255,0.12); padding: 8px 20px; display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+.bottom-bar button { background: #238636; border: none; border-radius: 5px; padding: 7px 14px; color: #fff; font-family: inherit; font-size: 11px; cursor: pointer; font-weight: 600; }
+.bottom-bar button:hover { background: #2ea043; }
+.bottom-bar button.secondary { background: #1f6feb; }
+.bottom-bar button.secondary:hover { background: #388bfd; }
+
+/* ── Submit modal ── */
+.modal-bg { display: none; position: fixed; inset: 0; background: rgba(5,8,15,0.85); z-index: 20; align-items: center; justify-content: center; }
+.modal-bg.open { display: flex; }
+.modal { background: rgba(13,17,23,0.98); border: 1px solid rgba(88,166,255,0.2); border-radius: 8px; padding: 20px; width: 520px; max-width: 95vw; }
+.modal h3 { font-size: 14px; color: #f0f6fc; margin-bottom: 12px; }
+.modal textarea { width: 100%; background: rgba(5,8,15,0.8); border: 1px solid #30363d; border-radius: 4px; color: #c9d1d9; font-family: inherit; font-size: 11px; padding: 8px; min-height: 140px; resize: vertical; }
+.modal textarea:focus { outline: none; border-color: #58a6ff; }
+.modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+.modal .modal-actions button { border: none; border-radius: 4px; padding: 6px 14px; font-family: inherit; font-size: 11px; cursor: pointer; font-weight: 600; }
+.modal .btn-submit { background: #238636; color: #fff; }
+.modal .btn-cancel { background: rgba(48,54,61,0.6); color: #8b949e; }
+.modal-result { font-size: 10px; margin-top: 6px; min-height: 14px; }
+
+/* ── Misc ── */
+.empty { color: #484f58; font-size: 11px; padding: 10px 0; text-align: center; }
+.offline-note { background: rgba(248,81,73,0.06); border: 1px solid rgba(248,81,73,0.15); border-radius: 4px; padding: 6px 8px; font-size: 10px; color: #f85149; }
 </style>
 </head>
 <body>
 
 <div class="header">
   <h1>NML Collective</h1>
-  <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">Awaiting connection...</span></div>
+  <div class="config-bar" id="configBar">
+    <label>host</label>
+    <input type="text" name="host" id="cfgHost" value="localhost" />
+    <label>sentient</label>
+    <input type="number" id="cfgSentient" value="9001" min="1" max="65535" />
+    <label>oracle</label>
+    <input type="number" id="cfgOracle" value="9020" min="1" max="65535" />
+    <label>architect</label>
+    <input type="number" id="cfgArchitect" value="9005" min="1" max="65535" />
+    <label>custodian</label>
+    <input type="number" id="cfgCustodian" value="9010" min="1" max="65535" />
+    <button onclick="reconnect()">Connect</button>
+  </div>
+  <div><span class="status-dot" id="statusDot"></span><span id="statusText">Not connected</span></div>
 </div>
 
 <canvas id="nebula"></canvas>
 
+<!-- Focus panel (slide in from left on agent click) -->
 <div class="focus-panel" id="focusPanel">
-  <button class="fp-close" onclick="deselectAgent()">&times;</button>
+  <button class="fp-close" onclick="closeFocus()">&times;</button>
   <div id="focusContent"></div>
 </div>
 
+<!-- Submit program modal -->
+<div class="modal-bg" id="submitModal">
+  <div class="modal">
+    <h3>Submit Program to Sentient</h3>
+    <p style="font-size:10px;color:#6e7681;margin-bottom:8px">Paste NML program text. Sentient will sign and broadcast to all workers via MQTT.</p>
+    <textarea id="submitNml" placeholder="LD R0 @training_data&#10;TNET #1000 #0.01 #0&#10;...&#10;HALT"></textarea>
+    <div class="modal-result" id="submitResult"></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal('submitModal')">Cancel</button>
+      <button class="btn-submit" onclick="submitProgram()">Broadcast</button>
+    </div>
+  </div>
+</div>
+
+<!-- Sidebar -->
 <div class="sidebar">
   <h2>Agents</h2>
-  <div id="agentCards"><div style="color:#484f58;font-size:11px;padding:20px 0;text-align:center">No agents discovered</div></div>
+  <div id="agentCards"><div class="empty">No agents discovered</div></div>
 
-  <!-- Worker: execution results -->
-  <div id="sectionWorkerResults" class="section-hidden">
-    <h2>My Results</h2>
-    <div id="workerResults"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No programs executed</div></div>
-    <div class="consensus-bar" id="consensusBar" style="display:none">
-      <div class="label">Vote Consensus</div>
-      <div class="value" id="consensusValue">-</div>
-      <div class="strategy" id="consensusStrategy"></div>
-    </div>
-  </div>
+  <h2>Oracle Assessments</h2>
+  <div id="assessmentSection"><div class="empty">No oracle connected</div></div>
 
-  <!-- Sentient: Nebula management -->
-  <div id="sectionNebula">
-    <h2>Nebula</h2>
-    <div id="nebulaStats"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No sentient connected</div></div>
-    <div id="quarantineList"></div>
-  </div>
+  <h2>Agent Confidence</h2>
+  <div id="confidenceSection"><div class="empty">—</div></div>
 
-  <!-- Worker: data submission -->
-  <div id="sectionDataSubmit" class="section-hidden">
-    <h2>Submit Data</h2>
-    <div class="data-submit-form">
-      <input type="text" id="dataName" placeholder="@name (e.g. transactions_batch_47)" />
-      <textarea id="dataContent" placeholder="shape=6,500 data=0.1,0.2,..."></textarea>
-      <input type="text" id="dataDescription" placeholder="Description (e.g. US East transactions March 2026)" />
-      <input type="text" id="dataDomain" placeholder="Domain (e.g. fraud_detection)" />
-      <input type="text" id="dataTags" placeholder="Tags (comma-separated, e.g. us_east, march)" />
-      <input type="text" id="dataFeatures" placeholder="Features (comma-separated, e.g. amount, frequency, risk)" />
-      <button onclick="submitData()">Submit to Quarantine</button>
-      <div id="dataSubmitResult"></div>
-    </div>
-  </div>
+  <h2>Data Pool</h2>
+  <div id="dataPoolSection"><div class="empty">No custodian connected</div></div>
 
-  <!-- Oracle: knowledge panel -->
-  <div id="sectionOracle">
-    <h2>Oracle</h2>
-    <div id="oracleStats"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No oracle connected</div></div>
-    <div id="oracleInteractive" style="display:none">
-      <div class="oracle-panel">
-        <div class="oracle-input-row">
-          <input type="text" id="oracleInput" placeholder="Ask the Oracle..." onkeydown="if(event.key==='Enter')askOracle()"/>
-          <button onclick="askOracle()">Ask</button>
-        </div>
-        <div id="oracleAnswer"></div>
-      </div>
-    </div>
-  </div>
+  <h2>Quarantine</h2>
+  <div id="quarantineSection"><div class="empty">—</div></div>
 
-  <!-- Enforcer: threat board -->
-  <div id="sectionEnforcer" class="section-hidden">
-    <h2>Threat Board</h2>
-    <div id="enforcerStats"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No enforcer connected</div></div>
-    <div id="threatBoard"></div>
-  </div>
-
-  <!-- Architect: build panel + catalog -->
-  <div id="sectionArchitect" class="section-hidden">
-    <h2>Architect</h2>
-    <div id="architectStats"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No architect connected</div></div>
+  <h2>Architect</h2>
+  <div id="architectSection">
+    <div id="architectStats"><div class="empty">No architect connected</div></div>
     <div id="architectCatalog"></div>
+    <div class="generate-form" style="margin-top:8px">
+      <textarea id="generateSpec" placeholder="Describe the program spec, e.g.: fraud detection on credit card transactions with 6 features"></textarea>
+      <button onclick="generateProgram()">Generate</button>
+      <div class="generate-result" id="generateResult"></div>
+    </div>
   </div>
 
-  <!-- Oracle: recommendations -->
-  <div id="sectionRecommend" class="section-hidden">
-    <h2>Recommendations</h2>
-    <div id="oracleRecommendations"><div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">Loading...</div></div>
-  </div>
-
-  <h2>Event Feed</h2>
-  <div id="eventFeed"><div style="color:#484f58;font-size:11px;padding:20px 0;text-align:center">Waiting for events...</div></div>
+  <h2>Event Log</h2>
+  <div id="eventLog"><div class="empty">Waiting for events...</div></div>
 </div>
 
-<div class="bottom-bar" id="actionBar">
-  <button id="submitBtn" onclick="submitProgram()">Broadcast Program</button>
-  <button id="consensusBtn" onclick="requestConsensus()">VOTE Consensus</button>
+<!-- Bottom bar -->
+<div class="bottom-bar">
+  <button class="secondary" onclick="openModal('submitModal')">Submit Program</button>
 </div>
-<input type="hidden" id="seedInput" />
 
 <script>
-const agents = {};
-let allEvents = [];
-let knownSeed = null;
-let hostRole = null;
-let roleApplied = false;
-const wsConnections = {};
+/* ════════════════════════════════════════
+   CONFIG — parse URL params or defaults
+   ════════════════════════════════════════ */
+const QS = new URLSearchParams(location.search);
+const CFG = {
+  host:      QS.get('host')      || 'localhost',
+  sentient:  +QS.get('sentient') || 9001,
+  oracle:    +QS.get('oracle')   || 9020,
+  architect: +QS.get('architect')|| 9005,
+  custodian: +QS.get('custodian')|| 9010,
+};
 
-/* ═══════════════════════════════════════════
-   INTERACTION STATE — zoom, selection, focus
-   ═══════════════════════════════════════════ */
-let zoomLevel = 1.0;
-const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 2.8;
-const ZOOM_NEBULA_STOP = 2.4;
-let selectedAgentName = null;
-let focusAnimT = 0;
-let focusX = 0, focusY = 0;
-let lastAgentHitboxes = [];
+function loadConfig() {
+  document.getElementById('cfgHost').value      = CFG.host;
+  document.getElementById('cfgSentient').value  = CFG.sentient;
+  document.getElementById('cfgOracle').value    = CFG.oracle;
+  document.getElementById('cfgArchitect').value = CFG.architect;
+  document.getElementById('cfgCustodian').value = CFG.custodian;
+}
 
-/* ═══════════════════════════════════════════
-   NEBULA + ORBIT RENDERER
-   ═══════════════════════════════════════════ */
+function reconnect() {
+  CFG.host      = document.getElementById('cfgHost').value.trim()      || 'localhost';
+  CFG.sentient  = +document.getElementById('cfgSentient').value         || 9001;
+  CFG.oracle    = +document.getElementById('cfgOracle').value           || 9020;
+  CFG.architect = +document.getElementById('cfgArchitect').value        || 9005;
+  CFG.custodian = +document.getElementById('cfgCustodian').value        || 9010;
+  logEvent('system', 'connecting to ' + CFG.host);
+  pollAll();
+}
+
+function url(port, path) {
+  return `http://${CFG.host}:${port}${path}`;
+}
+
+loadConfig();
+
+/* ════════════════════════════════════════
+   STATE
+   ════════════════════════════════════════ */
+let knownAgents    = {};   // name → {name, ip, port, active, quarantined}
+let assessments    = [];   // [{phash, weighted_mean, confidence, votes}]
+let agentConf      = [];   // [{name, confidence, votes, outliers}]
+let custodianPool  = [];   // [{hash, name, author, n_samples, status, served}]
+let quarantineList = [];   // [{hash, name, author, submitted_at}]
+let archCatalog    = [];   // [{phash, spec, provenance, template, validated}]
+let archTemplates  = [];   // [{id, name}]
+let sentientHealth = null;
+let oracleHealth   = null;
+let archHealth     = null;
+let custodianHealth= null;
+let events         = [];   // rolling log
+let selectedAgent  = null;
+let liveAgentVotes = {};   // name → {score, outlier} (latest assessment detail)
+let pollOk         = 0;    // count of successful polls this cycle
+let startTime      = Date.now();
+
+/* ════════════════════════════════════════
+   POLLING
+   ════════════════════════════════════════ */
+async function safeFetch(url) {
+  const resp = await fetch(url, { mode: 'cors' });
+  if (!resp.ok) throw new Error(resp.status);
+  return resp.json();
+}
+
+async function pollSentient() {
+  try {
+    sentientHealth = await safeFetch(url(CFG.sentient, '/health'));
+    const q = await safeFetch(url(CFG.sentient, '/data/quarantine'));
+    quarantineList = Array.isArray(q) ? q : [];
+    pollOk++;
+    logEvent('sentient', `quorum=${sentientHealth.quorum} quarantine=${sentientHealth.quarantine_pending}`);
+  } catch(e) { sentientHealth = null; }
+}
+
+async function pollOracle() {
+  try {
+    oracleHealth = await safeFetch(url(CFG.oracle, '/health'));
+    const a = await safeFetch(url(CFG.oracle, '/assessments'));
+    assessments = Array.isArray(a) ? a : [];
+    const ac = await safeFetch(url(CFG.oracle, '/agents'));
+    agentConf = Array.isArray(ac) ? ac : [];
+    const peers = await safeFetch(url(CFG.oracle, '/peers'));
+    if (Array.isArray(peers)) updateAgentTable(peers);
+    /* Fetch latest assessment detail for per-agent scores */
+    if (assessments.length > 0) {
+      const latest = assessments[assessments.length - 1];
+      try {
+        const detail = await safeFetch(url(CFG.oracle, '/assessments/' + latest.phash));
+        liveAgentVotes = {};
+        for (const v of (detail.votes || [])) {
+          liveAgentVotes[v.voter] = { score: v.score, outlier: v.outlier };
+        }
+      } catch(e) {}
+    }
+    pollOk++;
+    logEvent('oracle', `assessments=${assessments.length} agents=${agentConf.length}`);
+  } catch(e) { oracleHealth = null; }
+}
+
+async function pollArchitect() {
+  try {
+    archHealth = await safeFetch(url(CFG.architect, '/health'));
+    const cat  = await safeFetch(url(CFG.architect, '/catalog'));
+    archCatalog = Array.isArray(cat) ? cat : (cat.catalog || []);
+    if (archTemplates.length === 0) {
+      const tmpl = await safeFetch(url(CFG.architect, '/templates'));
+      archTemplates = Array.isArray(tmpl) ? tmpl : [];
+    }
+    pollOk++;
+    logEvent('architect', `catalog=${archCatalog.length} templates=${archHealth.templates}`);
+  } catch(e) { archHealth = null; }
+}
+
+async function pollCustodian() {
+  try {
+    custodianHealth = await safeFetch(url(CFG.custodian, '/health'));
+    const pool = await safeFetch(url(CFG.custodian, '/pool'));
+    custodianPool = Array.isArray(pool) ? pool : [];
+    pollOk++;
+    logEvent('custodian', `items=${custodianHealth.items} approved=${custodianHealth.approved}`);
+  } catch(e) { custodianHealth = null; }
+}
+
+async function pollAll() {
+  pollOk = 0;
+  await Promise.allSettled([pollSentient(), pollOracle(), pollArchitect(), pollCustodian()]);
+  /* Sync configured roles into knownAgents */
+  if (sentientHealth) syncRole('sentient',  CFG.sentient);
+  if (oracleHealth)   syncRole('oracle',    CFG.oracle);
+  if (archHealth)     syncRole('architect', CFG.architect);
+  if (custodianHealth)syncRole('custodian', CFG.custodian);
+  updateStatus();
+  renderSidebar();
+  if (selectedAgent) updateFocus(selectedAgent);
+}
+
+function syncRole(role, port) {
+  const h = role === 'sentient' ? sentientHealth :
+            role === 'oracle'    ? oracleHealth :
+            role === 'architect' ? archHealth : custodianHealth;
+  const name = h?.name || role;
+  if (!knownAgents[name]) knownAgents[name] = {};
+  knownAgents[name].name = name;
+  knownAgents[name].role = role;
+  knownAgents[name].port = port;
+  knownAgents[name].ip   = CFG.host;
+  knownAgents[name].active = true;
+}
+
+function updateAgentTable(peers) {
+  for (const p of peers) {
+    if (!p.name) continue;
+    if (!knownAgents[p.name]) knownAgents[p.name] = {};
+    Object.assign(knownAgents[p.name], {
+      name: p.name,
+      ip:   p.ip || CFG.host,
+      port: p.port || 0,
+      active:      p.active      !== false,
+      quarantined: p.quarantined || false,
+    });
+    /* Infer role from name prefix if not already set */
+    if (!knownAgents[p.name].role) {
+      const pref = ['sentient','worker','oracle','architect','enforcer','custodian','herald','emissary'];
+      for (const r of pref) if (p.name.startsWith(r)) { knownAgents[p.name].role = r; break; }
+    }
+  }
+}
+
+function logEvent(src, msg) {
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  events.unshift({ src, msg, t: elapsed });
+  if (events.length > 60) events.pop();
+}
+
+/* ════════════════════════════════════════
+   STATUS BAR
+   ════════════════════════════════════════ */
+function updateStatus() {
+  const dot  = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  const total = Object.keys(knownAgents).length;
+  if (pollOk > 0) {
+    dot.className  = 'status-dot live';
+    text.textContent = `${total} agent${total !== 1 ? 's' : ''} · ${pollOk}/4 roles online`;
+  } else {
+    dot.className  = 'status-dot error';
+    text.textContent = 'No roles reachable — check config';
+  }
+}
+
+/* ════════════════════════════════════════
+   SIDEBAR RENDER
+   ════════════════════════════════════════ */
+function roleColor(role) {
+  const map = { sentient:'#d2a8ff', worker:'#3fb950', oracle:'#d29922', architect:'#38ada9', enforcer:'#da3633', custodian:'#58a6ff', herald:'#a78bfa', emissary:'#faa946' };
+  return map[role] || '#8b949e';
+}
+
+function renderSidebar() {
+  renderAgentCards();
+  renderAssessments();
+  renderConfidence();
+  renderDataPool();
+  renderQuarantine();
+  renderArchitect();
+  renderEventLog();
+}
+
+function renderAgentCards() {
+  const list = Object.values(knownAgents);
+  if (list.length === 0) { document.getElementById('agentCards').innerHTML = '<div class="empty">No agents — waiting for Oracle /peers</div>'; return; }
+  list.sort((a, b) => {
+    const order = ['sentient','oracle','architect','custodian','herald','emissary','enforcer','worker'];
+    return (order.indexOf(a.role) - order.indexOf(b.role)) || a.name.localeCompare(b.name);
+  });
+  let html = '';
+  for (const a of list) {
+    const vote  = liveAgentVotes[a.name];
+    const score = vote?.score;
+    const confData = agentConf.find(c => c.name === a.name);
+    const isSelected = a.name === selectedAgent;
+    let scoreHtml = '';
+    if (score != null) {
+      const cls = score >= 0.5 ? 'high' : 'low';
+      scoreHtml = `<div class="score ${cls}">${score.toFixed(4)}${vote.outlier ? ' ⚠' : ''}</div>`;
+    } else if (confData) {
+      scoreHtml = `<div class="score na">conf ${confData.confidence.toFixed(2)}</div>`;
+    } else {
+      scoreHtml = `<div class="score na">—</div>`;
+    }
+    const qTag = a.quarantined ? '<span style="color:#f85149;font-size:9px;margin-left:5px">QUARANTINED</span>' : '';
+    const off  = !a.active ? '<span class="role-badge offline">offline</span>' : '';
+    const roleBadge = a.role ? `<span class="role-badge ${a.role}">${a.role}</span>` : '';
+    html += `<div class="agent-card ${isSelected ? 'selected' : ''}" onclick="selectAgent('${a.name}')">
+      <div class="name">${a.name}${roleBadge}${off}${qTag}</div>
+      <div class="meta">${a.ip || '?'}${a.port ? ':' + a.port : ''}</div>
+      ${scoreHtml}
+    </div>`;
+  }
+  document.getElementById('agentCards').innerHTML = html;
+}
+
+function renderAssessments() {
+  const el = document.getElementById('assessmentSection');
+  if (!oracleHealth) { el.innerHTML = '<div class="offline-note">Oracle offline — check port ' + CFG.oracle + '</div>'; return; }
+  if (assessments.length === 0) { el.innerHTML = '<div class="empty">No programs assessed yet</div>'; return; }
+  let html = `<div class="assess-header"><span>Program</span><span>Score</span><span>Conf</span><span>Votes</span></div>`;
+  for (const a of [...assessments].reverse().slice(0, 10)) {
+    const cls = a.weighted_mean >= 0.5 ? 'high' : 'low';
+    const ph  = (a.phash || '?').substring(0, 8);
+    html += `<div class="assess-row" onclick="showAssessDetail('${a.phash || ''}')">
+      <span class="phash" title="${a.phash}">${ph}…</span>
+      <span class="score ${cls}">${(a.weighted_mean || 0).toFixed(4)}</span>
+      <span class="conf">${(a.confidence || 0).toFixed(2)}</span>
+      <span class="voters">${a.votes || 0}</span>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderConfidence() {
+  const el = document.getElementById('confidenceSection');
+  if (agentConf.length === 0) { el.innerHTML = '<div class="empty">—</div>'; return; }
+  let html = '';
+  for (const a of agentConf) {
+    const pct    = Math.round(a.confidence * 100);
+    const outPct = a.votes > 0 ? Math.round((a.outliers / a.votes) * 100) : 0;
+    html += `<div class="conf-row">
+      <span class="cname" title="${a.name}">${a.name}</span>
+      <div class="conf-bar-track"><div class="conf-bar-fill" style="width:${pct}%"></div></div>
+      <span class="conf-val">${a.confidence.toFixed(2)}</span>
+      ${outPct > 0 ? `<span class="conf-out">${outPct}%⚠</span>` : '<span class="conf-out"></span>'}
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderDataPool() {
+  const el = document.getElementById('dataPoolSection');
+  if (!custodianHealth) { el.innerHTML = '<div class="offline-note">Custodian offline — check port ' + CFG.custodian + '</div>'; return; }
+  const approved = custodianPool.filter(i => i.status === 'approved');
+  if (approved.length === 0) { el.innerHTML = '<div class="empty">No approved data objects</div>'; return; }
+  let html = '';
+  for (const item of approved) {
+    html += `<div class="data-item">
+      <div><span class="di-name">@${item.name || '?'}</span><span class="di-status approved">approved</span></div>
+      <div class="di-meta">${item.author || '?'} · ${item.n_samples || 0} samples · served ${item.served || 0}×</div>
+      <div class="di-meta" style="font-size:9px;color:#484f58">${(item.hash||'').substring(0,16)}</div>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderQuarantine() {
+  const el = document.getElementById('quarantineSection');
+  /* Show from both custodian (pending) and sentient (quarantine array) */
+  const custPending = custodianPool.filter(i => i.status === 'pending');
+  const sentPending = quarantineList;
+  const all = [
+    ...custPending.map(i => ({ ...i, _src: 'custodian' })),
+    ...sentPending.map(i => ({ ...i, _src: 'sentient' })),
+  ];
+  if (all.length === 0) { el.innerHTML = '<div class="empty" style="color:#3fb950">All clear</div>'; return; }
+  let html = '';
+  for (const item of all) {
+    const hash = item.hash || '';
+    const name = item.name || '?';
+    const src  = item._src;
+    html += `<div class="data-item">
+      <div><span class="di-name">@${name}</span><span class="di-status pending">pending</span></div>
+      <div class="di-meta">${item.author || '?'} · via ${src}</div>
+      <div class="di-meta" style="font-size:9px;color:#484f58">${hash.substring(0,16)}</div>
+      <div class="di-actions">
+        <button class="btn-approve" onclick="approveItem('${src}','${hash}')">Approve</button>
+        <button class="btn-reject"  onclick="rejectItem('${src}','${hash}')">Reject</button>
+      </div>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderArchitect() {
+  const statsEl   = document.getElementById('architectStats');
+  const catalogEl = document.getElementById('architectCatalog');
+  if (!archHealth) {
+    statsEl.innerHTML   = '<div class="offline-note">Architect offline — check port ' + CFG.architect + '</div>';
+    catalogEl.innerHTML = '';
+    return;
+  }
+  statsEl.innerHTML = `
+    <div class="arch-stat"><span>Catalog</span><span class="val">${archHealth.catalog || 0}</span></div>
+    <div class="arch-stat"><span>Templates</span><span class="val">${archHealth.templates || 0}</span></div>
+    <div class="arch-stat"><span>LLM</span><span class="val">${archHealth.llm ? 'connected' : 'template-only'}</span></div>
+  `;
+  if (archCatalog.length === 0) { catalogEl.innerHTML = '<div class="empty">No programs built yet</div>'; return; }
+  let html = '';
+  for (const item of [...archCatalog].reverse().slice(0, 5)) {
+    const valCls = item.validated ? 'ci-valid' : 'ci-invalid';
+    const valTxt = item.validated ? '✓ validated' : '✗ not validated';
+    html += `<div class="catalog-item">
+      <div><span class="ci-hash">${(item.phash||'?').substring(0,12)}…</span> <span class="${valCls}">${valTxt}</span></div>
+      <div class="ci-spec">${item.spec || '?'}</div>
+      <div class="ci-prov">via ${item.provenance || '?'} ${item.template ? '· ' + item.template : ''}</div>
+    </div>`;
+  }
+  catalogEl.innerHTML = html;
+}
+
+function renderEventLog() {
+  const el = document.getElementById('eventLog');
+  if (events.length === 0) { el.innerHTML = '<div class="empty">Waiting for events...</div>'; return; }
+  let html = '';
+  for (const e of events.slice(0, 30)) {
+    html += `<div class="ev-item"><span class="ev-t">${e.t}s</span><span class="ev-src ${e.src}">${e.src}</span><span class="ev-msg">${e.msg}</span></div>`;
+  }
+  el.innerHTML = html;
+}
+
+/* ════════════════════════════════════════
+   FOCUS PANEL (agent detail)
+   ════════════════════════════════════════ */
+function selectAgent(name) {
+  selectedAgent = name;
+  updateFocus(name);
+  document.getElementById('focusPanel').classList.add('open');
+  renderAgentCards();
+}
+
+function closeFocus() {
+  selectedAgent = null;
+  document.getElementById('focusPanel').classList.remove('open');
+  renderAgentCards();
+}
+
+function updateFocus(name) {
+  const a    = knownAgents[name];
+  if (!a) return;
+  const vote = liveAgentVotes[name];
+  const conf = agentConf.find(c => c.name === name);
+  const rc   = roleColor(a.role);
+
+  let body = `
+    <div class="fp-name" style="color:${rc}">${a.name}</div>
+    <span class="role-badge ${a.role || ''}" style="margin:4px 0 10px;display:inline-block">${a.role || 'unknown'}</span>
+    <h2>Connection</h2>
+    <div class="fp-row"><span>Address</span><span class="val">${a.ip || '?'}${a.port ? ':' + a.port : ''}</span></div>
+    <div class="fp-row"><span>Active</span><span class="val ${a.active ? 'ok' : 'err'}">${a.active ? 'yes' : 'no'}</span></div>
+    <div class="fp-row"><span>Quarantined</span><span class="val ${a.quarantined ? 'err' : 'ok'}">${a.quarantined ? 'YES' : 'no'}</span></div>
+  `;
+
+  if (vote != null) {
+    const scoreCls = vote.score >= 0.5 ? 'err' : 'ok';
+    body += `
+      <h2>Latest Vote</h2>
+      <div class="fp-row"><span>Score</span><span class="val ${scoreCls}">${vote.score.toFixed(6)}</span></div>
+      <div class="fp-row"><span>Outlier</span><span class="val ${vote.outlier ? 'err' : 'ok'}">${vote.outlier ? 'YES ⚠' : 'no'}</span></div>
+    `;
+  }
+
+  if (conf) {
+    const pct    = (conf.confidence * 100).toFixed(0);
+    const outPct = conf.votes > 0 ? ((conf.outliers / conf.votes) * 100).toFixed(0) : '0';
+    body += `
+      <h2>Oracle Confidence</h2>
+      <div class="fp-row"><span>Weight</span><span class="val">${conf.confidence.toFixed(4)} (${pct}%)</span></div>
+      <div class="fp-row"><span>Votes cast</span><span class="val">${conf.votes}</span></div>
+      <div class="fp-row"><span>Outliers</span><span class="val ${conf.outliers > 0 ? 'warn' : 'ok'}">${conf.outliers} (${outPct}%)</span></div>
+    `;
+  }
+
+  /* Role-specific data */
+  if (a.role === 'sentient' && sentientHealth) {
+    body += `
+      <h2>Sentient</h2>
+      <div class="fp-row"><span>Quorum</span><span class="val">${sentientHealth.quorum}</span></div>
+      <div class="fp-row"><span>Data objects</span><span class="val">${sentientHealth.data_names}</span></div>
+      <div class="fp-row"><span>Quarantine</span><span class="val ${sentientHealth.quarantine_pending > 0 ? 'warn' : 'ok'}">${sentientHealth.quarantine_pending} pending</span></div>
+    `;
+  }
+  if (a.role === 'oracle' && oracleHealth) {
+    body += `
+      <h2>Oracle</h2>
+      <div class="fp-row"><span>Sessions</span><span class="val">${oracleHealth.sessions}</span></div>
+      <div class="fp-row"><span>Agents tracked</span><span class="val">${oracleHealth.agents}</span></div>
+      <div class="fp-row"><span>Assessments</span><span class="val">${assessments.length}</span></div>
+    `;
+  }
+  if (a.role === 'architect' && archHealth) {
+    body += `
+      <h2>Architect</h2>
+      <div class="fp-row"><span>Catalog</span><span class="val">${archHealth.catalog}</span></div>
+      <div class="fp-row"><span>Templates</span><span class="val">${archHealth.templates}</span></div>
+      <div class="fp-row"><span>LLM</span><span class="val">${archHealth.llm ? 'yes' : 'no'}</span></div>
+    `;
+  }
+  if (a.role === 'custodian' && custodianHealth) {
+    body += `
+      <h2>Custodian</h2>
+      <div class="fp-row"><span>Total items</span><span class="val">${custodianHealth.items}</span></div>
+      <div class="fp-row"><span>Approved</span><span class="val ok">${custodianHealth.approved}</span></div>
+    `;
+  }
+
+  document.getElementById('focusContent').innerHTML = body;
+}
+
+/* ════════════════════════════════════════
+   ASSESSMENT DETAIL (opens focus panel)
+   ════════════════════════════════════════ */
+async function showAssessDetail(phash) {
+  if (!phash) return;
+  document.getElementById('focusPanel').classList.add('open');
+  document.getElementById('focusContent').innerHTML = '<div class="empty">Loading...</div>';
+  try {
+    const d = await safeFetch(url(CFG.oracle, '/assessments/' + phash));
+    const cls = d.weighted_mean >= 0.5 ? '#f85149' : '#3fb950';
+    let votesHtml = '';
+    for (const v of (d.votes || [])) {
+      const sc  = typeof v.score === 'number' ? v.score.toFixed(6) : '?';
+      const ocls = v.outlier ? 'outlier' : 'normal';
+      votesHtml += `<div class="fp-vote">
+        <span class="vname">${v.voter || '?'}</span>
+        <span class="vscore ${ocls}">${sc}${v.outlier ? ' ⚠' : ''}</span>
+      </div>`;
+    }
+    document.getElementById('focusContent').innerHTML = `
+      <div class="fp-name" style="color:${cls}">${phash.substring(0,12)}…</div>
+      <span class="role-badge oracle" style="margin:4px 0 10px;display:inline-block">assessment</span>
+      <h2>Consensus</h2>
+      <div class="fp-row"><span>Raw mean</span><span class="val">${(d.raw_mean||0).toFixed(6)}</span></div>
+      <div class="fp-row"><span>Weighted mean</span><span class="val" style="color:${cls}">${(d.weighted_mean||0).toFixed(6)}</span></div>
+      <div class="fp-row"><span>Confidence</span><span class="val">${(d.confidence||0).toFixed(4)}</span></div>
+      <h2>Votes (${(d.votes||[]).length})</h2>
+      <div class="fp-vote-list">${votesHtml || '<div class="empty">No votes</div>'}</div>
+    `;
+  } catch(e) {
+    document.getElementById('focusContent').innerHTML = `<div class="offline-note">Failed to load: ${e.message}</div>`;
+  }
+}
+
+/* ════════════════════════════════════════
+   ACTIONS
+   ════════════════════════════════════════ */
+async function submitProgram() {
+  const nml = document.getElementById('submitNml').value.trim();
+  if (!nml) return;
+  const el = document.getElementById('submitResult');
+  el.textContent = 'Submitting...';
+  el.style.color = '#8b949e';
+  try {
+    const resp = await fetch(url(CFG.sentient, '/program'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: nml,
+    });
+    const data = await resp.json();
+    el.textContent = `hash: ${data.hash || '?'} · status: ${data.status || '?'}`;
+    el.style.color = '#3fb950';
+    logEvent('sentient', 'program submitted hash=' + (data.hash || '?'));
+    setTimeout(() => closeModal('submitModal'), 1500);
+  } catch(e) {
+    el.textContent = 'Error: ' + e.message;
+    el.style.color = '#f85149';
+  }
+}
+
+async function generateProgram() {
+  const spec = document.getElementById('generateSpec').value.trim();
+  if (!spec) return;
+  const el = document.getElementById('generateResult');
+  el.textContent = 'Sending spec to architect...';
+  try {
+    const resp = await fetch(url(CFG.architect, '/generate'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ spec }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      el.textContent = 'Generation triggered — check catalog';
+      logEvent('architect', 'generate triggered for: ' + spec.substring(0, 40));
+      setTimeout(() => pollArchitect().then(renderSidebar), 2000);
+    } else {
+      el.textContent = 'Error: ' + (data.error || 'unknown');
+      el.style.color = '#f85149';
+    }
+  } catch(e) {
+    el.textContent = 'Error: ' + e.message;
+    el.style.color = '#f85149';
+  }
+}
+
+async function approveItem(src, hash) {
+  if (!hash) return;
+  try {
+    if (src === 'custodian') {
+      await fetch(url(CFG.custodian, '/approve'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hash }),
+      });
+      logEvent('custodian', 'approved ' + hash.substring(0, 12));
+    } else {
+      await fetch(url(CFG.sentient, '/data/approve'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hash }),
+      });
+      logEvent('sentient', 'approved ' + hash.substring(0, 12));
+    }
+    await Promise.all([pollSentient(), pollCustodian()]);
+    renderSidebar();
+  } catch(e) { logEvent('system', 'approve failed: ' + e.message); }
+}
+
+async function rejectItem(src, hash) {
+  /* Sentient has no reject endpoint — just log it. Custodian also uses approve/reject flow. */
+  logEvent('system', 'reject not yet implemented in C99 agents (hash=' + hash.substring(0,12) + ')');
+}
+
+/* ════════════════════════════════════════
+   MODAL HELPERS
+   ════════════════════════════════════════ */
+function openModal(id)  { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    closeModal('submitModal');
+    closeFocus();
+  }
+});
+
+/* ════════════════════════════════════════
+   CANVAS — NEBULA + ORBITAL
+   ════════════════════════════════════════ */
 const canvas = document.getElementById('nebula');
-const ctx = canvas.getContext('2d');
+const ctx    = canvas.getContext('2d');
 let W, H, frame = 0;
-const particles = [];
+const particles  = [];
 const dataStreams = [];
+let zoomLevel = 1.0;
+let lastHitboxes = [];
+let nebulaPulseCurrent = 1.0, nebulaPulseTarget = 1.0, nebulaLastEventCount = 0;
 
 function resize() {
-  W = canvas.width = window.innerWidth * 2;
+  W = canvas.width  = window.innerWidth * 2;
   H = canvas.height = window.innerHeight * 2;
-  ctx.scale(1, 1);
 }
 resize();
 window.addEventListener('resize', resize);
 
-canvas.addEventListener('wheel', (e) => {
+canvas.addEventListener('wheel', e => {
   e.preventDefault();
-  const delta = e.deltaY > 0 ? -0.08 : 0.08;
-  const maxZoom = selectedAgentName ? ZOOM_MAX : ZOOM_NEBULA_STOP;
-  zoomLevel = Math.max(ZOOM_MIN, Math.min(maxZoom, zoomLevel + delta));
+  zoomLevel = Math.max(0.5, Math.min(2.8, zoomLevel + (e.deltaY > 0 ? -0.08 : 0.08)));
 }, { passive: false });
 
-canvas.addEventListener('click', (e) => {
+canvas.addEventListener('click', e => {
   const rect = canvas.getBoundingClientRect();
   const mx = (e.clientX - rect.left) * (W / rect.width);
-  const my = (e.clientY - rect.top) * (H / rect.height);
-
+  const my = (e.clientY - rect.top)  * (H / rect.height);
   let hit = null;
-  for (const hb of lastAgentHitboxes) {
-    const dx = mx - hb.x, dy = my - hb.y;
-    if (dx * dx + dy * dy < hb.r * hb.r) {
-      hit = hb.name;
-      break;
-    }
+  for (const hb of lastHitboxes) {
+    if ((mx - hb.x) ** 2 + (my - hb.y) ** 2 < hb.r ** 2) { hit = hb.name; break; }
   }
-
-  if (hit) {
-    if (selectedAgentName === hit) {
-      deselectAgent();
-    } else {
-      selectAgent(hit);
-    }
-  } else {
-    deselectAgent();
-  }
+  if (hit) { if (selectedAgent === hit) closeFocus(); else selectAgent(hit); }
+  else closeFocus();
 });
 
-canvas.addEventListener('mousemove', (e) => {
+canvas.addEventListener('mousemove', e => {
   const rect = canvas.getBoundingClientRect();
   const mx = (e.clientX - rect.left) * (W / rect.width);
-  const my = (e.clientY - rect.top) * (H / rect.height);
-  let over = false;
-  for (const hb of lastAgentHitboxes) {
-    const dx = mx - hb.x, dy = my - hb.y;
-    if (dx * dx + dy * dy < hb.r * hb.r) { over = true; break; }
-  }
-  canvas.style.cursor = over ? 'pointer' : 'default';
+  const my = (e.clientY - rect.top)  * (H / rect.height);
+  canvas.style.cursor = lastHitboxes.some(hb => (mx - hb.x) ** 2 + (my - hb.y) ** 2 < hb.r ** 2) ? 'pointer' : 'default';
 });
-
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeDetailPanel();
-});
-
-function selectAgent(name) {
-  selectedAgentName = name;
-  focusAnimT = 0;
-  document.getElementById('focusPanel').classList.add('open');
-  updateFocusPanel();
-}
-
-function deselectAgent() {
-  selectedAgentName = null;
-  focusAnimT = 0;
-  document.getElementById('focusPanel').classList.remove('open');
-}
-
-function closeDetailPanel() {
-  deselectAgent();
-}
-
-function openDetailPanel(html) {
-  selectedAgentName = null;
-  document.getElementById('focusContent').innerHTML = html;
-  document.getElementById('focusPanel').classList.add('open');
-}
-
-function showQuarantineDetail(hash) {
-  const sentientUrl = findSentientUrl() || knownSeed;
-  fetch(sentientUrl + '/data/quarantine').then(r => r.json()).then(data => {
-    const all = data.pending || [];
-    fetch(sentientUrl + '/data/pool').then(r2 => r2.json()).then(poolData => {
-      const allPool = [];
-      for (const [name, versions] of Object.entries(poolData.pool || {})) {
-        for (const v of versions) allPool.push(v);
-      }
-      const items = [...all, ...allPool];
-      const item = items.find(i => i.hash === hash);
-      if (!item) { openDetailPanel(`<div class="fp-name">Not found</div><div style="color:#6e7681;margin-top:8px">Hash ${hash} not in quarantine or pool</div>`); return; }
-      renderDataDetail(item);
-    });
-  }).catch(() => openDetailPanel('<div class="fp-name">Error loading data</div>'));
-}
-
-function renderDataDetail(item) {
-  const ctx = item.meta?.context || {};
-  const statusColor = item.status === 'approved' ? '#3fb950' : (item.status === 'rejected' ? '#f85149' : '#d29922');
-
-  let checksHTML = '';
-  const checks = item.meta?.auto_checks?.checks || [];
-  for (const c of checks) {
-    checksHTML += `<div class="fp-check ${c.passed ? 'pass' : 'fail'}">${c.passed ? '✓' : '✗'} ${c.name}${c.detail ? ' — ' + c.detail : ''}</div>`;
-  }
-
-  let votesHTML = '';
-  for (const v of (item.votes || [])) {
-    const vc = v.vote === 'approve' ? 'vote-approve' : 'vote-reject';
-    votesHTML += `<div class="fp-vote"><span class="${vc}">${v.vote}</span> by ${v.voter || v.sentient || '?'} (${v.role || 'sentient'})`;
-    if (v.reason) votesHTML += `<div style="color:#6e7681;font-size:9px;margin-top:1px">${v.reason}</div>`;
-    if (v.analysis) {
-      votesHTML += `<div style="color:#6e7681;font-size:9px;margin-top:1px">score=${v.analysis.score}`;
-      const failed = (v.analysis.checks || []).filter(c => !c.passed);
-      if (failed.length) votesHTML += ` · ${failed.map(c => c.detail || c.name).join(', ')}`;
-      votesHTML += `</div>`;
-    }
-    votesHTML += `</div>`;
-  }
-
-  let tagsHTML = '';
-  for (const t of (ctx.tags || [])) tagsHTML += `<span class="fp-tag">${t}</span>`;
-  for (const f of (ctx.features || [])) tagsHTML += `<span class="fp-tag" style="background:rgba(63,185,80,0.1);color:#3fb950">${f}</span>`;
-
-  openDetailPanel(`
-    <div class="fp-name" style="color:${statusColor}">@${item.meta?.name || '?'}</div>
-    <span class="role-badge" style="background:${statusColor}22;color:${statusColor};margin:4px 0 8px;display:inline-block">${item.status}</span>
-    <h2>Details</h2>
-    <div class="fp-detail"><span>Hash</span><span class="val" style="font-size:10px">${item.hash}</span></div>
-    <div class="fp-detail"><span>Author</span><span class="val">${item.author}</span></div>
-    <div class="fp-detail"><span>Size</span><span class="val">${item.content_size} bytes</span></div>
-    <div class="fp-detail"><span>Type</span><span class="val">${item.type}</span></div>
-    ${ctx.description ? `<div class="fp-detail"><span>Description</span><span class="val" style="font-size:10px">${ctx.description}</span></div>` : ''}
-    ${ctx.domain ? `<div class="fp-detail"><span>Domain</span><span class="val">${ctx.domain}</span></div>` : ''}
-    ${ctx.time_range ? `<div class="fp-detail"><span>Time range</span><span class="val" style="font-size:10px">${ctx.time_range}</span></div>` : ''}
-    ${tagsHTML ? `<div class="fp-section">${tagsHTML}</div>` : ''}
-    ${checksHTML ? `<h2>Auto-Checks</h2>${checksHTML}` : ''}
-    ${votesHTML ? `<h2>Votes (${item.votes?.length || 0})</h2>${votesHTML}` : ''}
-    ${item.reason ? `<h2>Reason</h2><div style="font-size:11px;color:#f85149">${item.reason}</div>` : ''}
-  `);
-}
-
-function showThreatDetail(agentName) {
-  const enforcerUrl = findEnforcerUrl() || knownSeed;
-  fetch(enforcerUrl + '/evidence?agent=' + agentName).then(r => r.json()).then(data => {
-    const ev = data.evidence || [];
-    fetch(enforcerUrl + '/threats').then(r2 => r2.json()).then(threats => {
-      const warn = threats.warnings?.[agentName];
-      const quar = threats.quarantined?.[agentName];
-      const black = threats.blacklisted?.[agentName];
-
-      let statusColor = '#3fb950';
-      let statusText = 'clear';
-      if (black) { statusColor = '#da3633'; statusText = 'BLACKLISTED'; }
-      else if (quar) { statusColor = '#f85149'; statusText = 'QUARANTINED'; }
-      else if (warn) { statusColor = '#d29922'; statusText = `${warn.count} warning(s)`; }
-
-      let evidenceHTML = '';
-      for (const e of ev.slice(-20).reverse()) {
-        const ts = new Date(e.time * 1000).toLocaleTimeString();
-        evidenceHTML += `<div class="fp-evidence-item"><span class="ev-type">${e.type}</span>${e.detail}<div style="color:#484f58;font-size:9px">${ts}</div></div>`;
-      }
-
-      openDetailPanel(`
-        <div class="fp-name">${agentName}</div>
-        <span class="role-badge" style="background:${statusColor}22;color:${statusColor};margin:4px 0 8px;display:inline-block">${statusText}</span>
-        ${quar ? `
-          <h2>Quarantine</h2>
-          <div class="fp-detail"><span>Reason</span><span class="val" style="font-size:10px">${quar.reason}</span></div>
-          <div class="fp-detail"><span>Remaining</span><span class="val">${Math.round(quar.remaining_seconds / 60)}m</span></div>
-          <div class="fp-detail"><span>Evidence items</span><span class="val">${quar.evidence_count}</span></div>
-          <div style="margin-top:6px"><button class="thr-lift" onclick="liftQuarantine('${agentName}');closeDetailPanel()">Lift Quarantine</button></div>
-        ` : ''}
-        ${black ? `
-          <h2>Blacklist</h2>
-          <div class="fp-detail"><span>Reason</span><span class="val" style="font-size:10px">${black.reason}</span></div>
-          <div class="fp-detail"><span>Approved by</span><span class="val">${black.approved_by}</span></div>
-        ` : ''}
-        <h2>Evidence (${ev.length})</h2>
-        ${evidenceHTML || '<div style="color:#484f58;font-size:10px">No evidence collected</div>'}
-      `);
-    });
-  }).catch(() => openDetailPanel(`<div class="fp-name">Error</div><div style="color:#6e7681">Could not load evidence for ${agentName}</div>`));
-}
-
-function showDataPool(sentientUrl) {
-  fetch(sentientUrl + '/data/pool').then(r => r.json()).then(data => {
-    let html = '<div class="fp-name" style="color:#3fb950">Data Pool</div>';
-    const pool = data.pool || {};
-    const names = Object.keys(pool);
-    if (names.length === 0) {
-      html += '<div style="color:#484f58;font-size:11px;margin-top:8px">No approved data</div>';
-      openDetailPanel(html); return;
-    }
-    for (const name of names) {
-      html += `<h2>@${name} (${pool[name].length} version${pool[name].length !== 1 ? 's' : ''})</h2>`;
-      for (const v of pool[name]) {
-        html += `<div class="quarantine-item fp-clickable" onclick="showQuarantineDetail('${v.hash}')" style="cursor:pointer">
-          <span class="q-name">${v.hash}</span>
-          <span class="q-meta"> · ${v.author} · ${v.content_size}B · ${v.status}</span>
-        </div>`;
-      }
-    }
-    openDetailPanel(html);
-  }).catch(() => openDetailPanel('<div class="fp-name">Error loading data pool</div>'));
-}
-
-function showQuarantineList(sentientUrl) {
-  fetch(sentientUrl + '/data/quarantine').then(r => r.json()).then(data => {
-    const pending = data.pending || [];
-    let html = '<div class="fp-name" style="color:#d29922">Quarantine</div>';
-    if (pending.length === 0) {
-      html += '<div style="color:#484f58;font-size:11px;margin-top:8px">No pending items</div>';
-      openDetailPanel(html); return;
-    }
-    html += `<div style="color:#8b949e;font-size:11px;margin:4px 0 8px">${pending.length} item(s) pending review</div>`;
-    for (const item of pending) {
-      const ctx = item.meta?.context || {};
-      html += `<div class="quarantine-item fp-clickable" onclick="showQuarantineDetail('${item.hash}')" style="cursor:pointer">
-        <span class="q-name">@${item.meta?.name || '?'}</span>
-        <span class="q-meta"> · ${item.author} · ${item.content_size}B · ${item.votes?.length || 0} vote(s)</span>
-        ${ctx.domain ? `<div style="color:#58a6ff;font-size:9px;margin-top:2px">${ctx.domain}</div>` : ''}
-      </div>`;
-    }
-    openDetailPanel(html);
-  }).catch(() => openDetailPanel('<div class="fp-name">Error loading quarantine</div>'));
-}
-
-function findEnforcerUrl() {
-  for (const a of Object.values(agents)) {
-    if (a.role === 'enforcer') return a.url;
-  }
-  return null;
-}
-
-function showExecutionDetail(hash) {
-  const agentList = Object.values(agents);
-  const results = [];
-  for (const a of agentList) {
-    if (a.last_result?.hash === hash) {
-      results.push({ agent: a.name, role: a.role, ...a.last_result });
-    }
-  }
-
-  let resultsHTML = '';
-  for (const r of results) {
-    const scoreColor = r.score != null ? (r.score >= 0.5 ? '#f85149' : '#3fb950') : '#484f58';
-    resultsHTML += `<div class="fp-detail"><span>${r.agent} (${r.role})</span><span class="val" style="color:${scoreColor}">${r.score != null ? r.score.toFixed(4) : 'n/a'}</span></div>`;
-  }
-
-  openDetailPanel(`
-    <div class="fp-name" style="color:#d2a8ff">Program ${hash}</div>
-    <h2>Execution Results</h2>
-    ${resultsHTML || '<div style="color:#484f58;font-size:10px">No results</div>'}
-    <h2>Details</h2>
-    <div class="fp-detail"><span>Hash</span><span class="val" style="font-size:10px">${hash}</span></div>
-    <div class="fp-detail"><span>Agents with results</span><span class="val">${results.length}</span></div>
-    ${results[0]?.exit_code != null ? `<div class="fp-detail"><span>Exit code</span><span class="val">${results[0].exit_code}</span></div>` : ''}
-    ${results[0]?.success != null ? `<div class="fp-detail"><span>Success</span><span class="val">${results[0].success}</span></div>` : ''}
-  `);
-}
-
-function updateFocusPanel() {
-  const a = agents[selectedAgentName];
-  if (!a) return;
-
-  const isOracle = a.role === 'oracle';
-  const isSentient = a.role === 'sentient';
-  const isHost = a.url === knownSeed;
-  const roleColor = isOracle ? '#d29922' : (isSentient ? '#d2a8ff' : '#3fb950');
-  const score = a.last_result?.score;
-  const scoreColor = score != null ? (score >= 0.5 ? '#f85149' : '#3fb950') : '#484f58';
-  const scoreText = score != null ? score.toFixed(4) : (isOracle ? 'observing' : 'no score');
-
-  let peersHTML = '';
-  for (const p of (a.peers || [])) {
-    peersHTML += `<span onclick="selectAgent('${p.name}')">${p.name}</span>  `;
-  }
-
-  let eventsHTML = '';
-  const agentEvents = allEvents.filter(e => e.agent === a.name).slice(0, 12);
-  for (const e of agentEvents) {
-    eventsHTML += `<div class="fp-event">${e.time.toFixed(1)}s · ${e.type} · ${e.detail}</div>`;
-  }
-
-  document.getElementById('focusContent').innerHTML = `
-    <div class="fp-name" style="color:${roleColor}">${a.name} ${isHost ? '<span style="color:#8b949e;font-size:11px">(you)</span>' : ''}</div>
-    <span class="role-badge ${a.role}" style="margin:4px 0 8px;display:inline-block">${a.role}</span>
-    <div class="fp-score-big" style="color:${scoreColor}">${scoreText}</div>
-    <h2>Details</h2>
-    <div class="fp-detail"><span>Peers</span><span class="val">${a.peer_count}</span></div>
-    <div class="fp-detail"><span>Programs</span><span class="val">${a.programs_received}</span></div>
-    <div class="fp-detail"><span>Results</span><span class="val">${a.results_count || 0}</span></div>
-    <div class="fp-detail"><span>Uptime</span><span class="val">${Math.round(a.uptime_seconds)}s</span></div>
-    <div class="fp-detail"><span>Local data</span><span class="val">${a.has_local_data ? 'yes' : 'no'}</span></div>
-    <div class="fp-detail"><span>UDP</span><span class="val">${a.udp_enabled ? 'on' : 'off'}</span></div>
-    <div class="fp-detail"><span>mDNS</span><span class="val">${a.mdns_enabled ? 'on' : 'off'}</span></div>
-    <div class="fp-detail"><span>Relay</span><span class="val">${a.relay_connected ? 'connected' : 'off'}</span></div>
-    ${a.last_result?.hash ? `<div class="fp-detail"><span>Last hash</span><span class="val" style="font-size:10px">${a.last_result.hash}</span></div>` : ''}
-    ${a.last_result?.exit_code != null ? `<div class="fp-detail"><span>Exit code</span><span class="val">${a.last_result.exit_code}</span></div>` : ''}
-    ${a.nebula_stats ? `
-    <h2>Nebula</h2>
-    <div class="fp-detail"><span>Programs</span><span class="val">${a.nebula_stats.programs}</span></div>
-    <div class="fp-detail"><span>Approved</span><span class="val">${a.nebula_stats.data_approved}</span></div>
-    <div class="fp-detail"><span>Quarantine</span><span class="val">${a.nebula_stats.quarantine_pending}</span></div>
-    <div class="fp-detail"><span>Ledger</span><span class="val">${a.nebula_stats.ledger_entries}</span></div>
-    ` : ''}
-    ${a.oracle_stats ? `
-    <h2>Oracle</h2>
-    <div class="fp-detail"><span>Tracked</span><span class="val">${a.oracle_stats.collective_size} agents</span></div>
-    <div class="fp-detail"><span>Events</span><span class="val">${a.oracle_stats.events_tracked}</span></div>
-    <div class="fp-detail"><span>LLM</span><span class="val">${a.oracle_stats.llm_connected ? 'connected' : 'none'}</span></div>
-    ` : ''}
-    <h2>Peers</h2>
-    <div class="fp-peers-list">${peersHTML || 'none'}</div>
-    <h2>Recent Events</h2>
-    ${eventsHTML || '<div style="color:#484f58;font-size:10px">No events</div>'}
-  `;
-}
 
 class Particle {
   constructor() { this.reset(); }
   reset() {
-    const a = Math.random() * Math.PI * 2;
-    const r = 20 + Math.random() * 60;
-    this.x = W/2 + Math.cos(a) * r;
-    this.y = H/2 + Math.sin(a) * r;
-    this.vx = (Math.random() - 0.5) * 0.8;
-    this.vy = (Math.random() - 0.5) * 0.8;
-    this.life = 0.5 + Math.random() * 1.5;
-    this.maxLife = this.life;
-    this.size = 1 + Math.random() * 2.5;
-    this.hue = 210 + Math.random() * 60;
+    const a = Math.random() * Math.PI * 2, r = 20 + Math.random() * 60;
+    this.x = W/2 + Math.cos(a)*r; this.y = H/2 + Math.sin(a)*r;
+    this.vx = (Math.random()-0.5)*0.8; this.vy = (Math.random()-0.5)*0.8;
+    this.life = this.maxLife = 0.5 + Math.random()*1.5;
+    this.size = 1 + Math.random()*2.5; this.hue = 210 + Math.random()*60;
   }
-  update(dt) {
-    this.x += this.vx;
-    this.y += this.vy;
-    this.life -= dt;
-    if (this.life <= 0) this.reset();
-  }
-  draw(ctx) {
-    const alpha = Math.max(0, this.life / this.maxLife) * 0.6;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-    ctx.fillStyle = `hsla(${this.hue}, 80%, 70%, ${alpha})`;
-    ctx.fill();
-  }
+  update(dt) { this.x+=this.vx; this.y+=this.vy; this.life-=dt; if(this.life<=0)this.reset(); }
+  draw(c)    { const a=Math.max(0,this.life/this.maxLife)*0.6; c.beginPath(); c.arc(this.x,this.y,this.size,0,Math.PI*2); c.fillStyle=`hsla(${this.hue},80%,70%,${a})`; c.fill(); }
 }
-
-for (let i = 0; i < 120; i++) particles.push(new Particle());
+for(let i=0;i<120;i++) particles.push(new Particle());
 
 class DataStream {
-  constructor(fromX, fromY, toX, toY) {
-    this.fromX = fromX; this.fromY = fromY;
-    this.toX = toX; this.toY = toY;
-    this.progress = 0;
-    this.speed = 0.008 + Math.random() * 0.012;
-    this.hue = 180 + Math.random() * 80;
-  }
-  update() {
-    this.progress += this.speed;
-    return this.progress < 1;
-  }
-  draw(ctx) {
-    const t = this.progress;
-    const x = this.fromX + (this.toX - this.fromX) * t;
-    const y = this.fromY + (this.toY - this.fromY) * t;
-    const alpha = Math.sin(t * Math.PI) * 0.9;
-    ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
-    ctx.fillStyle = `hsla(${this.hue}, 90%, 75%, ${alpha})`;
-    ctx.shadowColor = `hsla(${this.hue}, 90%, 60%, ${alpha})`;
-    ctx.shadowBlur = 10;
-    ctx.fill();
-    ctx.shadowBlur = 0;
-  }
+  constructor(fx,fy,tx,ty,hue=210) { this.fx=fx;this.fy=fy;this.tx=tx;this.ty=ty;this.progress=0;this.speed=0.008+Math.random()*0.012;this.hue=hue; }
+  update() { this.progress+=this.speed; return this.progress<1; }
+  draw(c)  { const t=this.progress,x=this.fx+(this.tx-this.fx)*t,y=this.fy+(this.ty-this.fy)*t,a=Math.sin(t*Math.PI)*0.9; c.beginPath();c.arc(x,y,3,0,Math.PI*2);c.fillStyle=`hsla(${this.hue},90%,75%,${a})`;c.shadowColor=`hsla(${this.hue},90%,60%,${a})`;c.shadowBlur=10;c.fill();c.shadowBlur=0; }
 }
 
-/* Nebula pulse state — grows when events happen */
-let nebulaPulseTarget = 1.0;
-let nebulaPulseCurrent = 1.0;
-let nebulaLastEventCount = 0;
-
 function drawNebula(time) {
-  const cx = W / 2, cy = H / 2;
-
-  const active = window._nebulaActive || false;
+  const cx=W/2,cy=H/2;
+  const active = custodianPool.some(i => i.status==='pending') || quarantineList.length > 0;
   const coreHue = active ? 280 : 230;
-
-  /* Pulse reacts to new events */
-  const eventCount = allEvents.length;
-  if (eventCount > nebulaLastEventCount) {
-    const burst = Math.min((eventCount - nebulaLastEventCount) * 0.15, 0.8);
-    nebulaPulseTarget = Math.min(nebulaPulseCurrent + burst, 2.5);
-    nebulaLastEventCount = eventCount;
+  const ec = events.length;
+  if(ec>nebulaLastEventCount){nebulaPulseTarget=Math.min(nebulaPulseCurrent+Math.min((ec-nebulaLastEventCount)*0.15,0.8),2.5);nebulaLastEventCount=ec;}
+  nebulaPulseTarget=Math.max(1.0,nebulaPulseTarget-0.002);
+  nebulaPulseCurrent+=(nebulaPulseTarget-nebulaPulseCurrent)*0.03;
+  const pulse=nebulaPulseCurrent;
+  const agentBoost=1.0+Object.keys(knownAgents).length*0.06;
+  const intensity=(active?1.5:1.0)*pulse*agentBoost;
+  const breathe=0.85+0.15*Math.sin(time*0.0008);
+  for(let layer=4;layer>=0;layer--){
+    const r=(40+layer*28)*breathe*intensity;
+    const grad=ctx.createRadialGradient(cx,cy,0,cx,cy,r);
+    const hue=coreHue+layer*12,sat=70+layer*5,a=(0.22-layer*0.04)*Math.min(intensity,2.0);
+    grad.addColorStop(0,`hsla(${hue},${sat}%,50%,${a})`);
+    grad.addColorStop(0.4,`hsla(${hue+15},${sat}%,45%,${a*0.5})`);
+    grad.addColorStop(0.7,`hsla(${hue+30},${sat-10}%,35%,${a*0.15})`);
+    grad.addColorStop(1,`hsla(${hue},${sat}%,30%,0)`);
+    ctx.fillStyle=grad; ctx.fillRect(cx-r,cy-r,r*2,r*2);
   }
-  nebulaPulseTarget = Math.max(1.0, nebulaPulseTarget - 0.002);
-  nebulaPulseCurrent += (nebulaPulseTarget - nebulaPulseCurrent) * 0.03;
-  const pulse = nebulaPulseCurrent;
-
-  const agentBoost = 1.0 + Object.keys(agents).length * 0.06;
-  const intensity = (active ? 1.5 : 1.0) * pulse * agentBoost;
-
-  /* Nebula glow layers — size scales with pulse */
-  const breathe = 0.85 + 0.15 * Math.sin(time * 0.0008);
-  for (let layer = 4; layer >= 0; layer--) {
-    const baseR = 40 + layer * 28;
-    const r = baseR * breathe * intensity;
-    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    const hue = coreHue + layer * 12;
-    const sat = 70 + layer * 5;
-    const alpha = (0.22 - layer * 0.04) * Math.min(intensity, 2.0);
-    grad.addColorStop(0, `hsla(${hue}, ${sat}%, 50%, ${alpha})`);
-    grad.addColorStop(0.4, `hsla(${hue + 15}, ${sat}%, 45%, ${alpha * 0.5})`);
-    grad.addColorStop(0.7, `hsla(${hue + 30}, ${sat - 10}%, 35%, ${alpha * 0.15})`);
-    grad.addColorStop(1, `hsla(${hue}, ${sat}%, 30%, 0)`);
-    ctx.fillStyle = grad;
-    ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
-  }
-
-  /* Outer halo — visible when pulsing */
-  if (pulse > 1.1) {
-    const haloR = 180 * intensity * breathe;
-    const haloAlpha = (pulse - 1.0) * 0.08;
-    const haloGrad = ctx.createRadialGradient(cx, cy, haloR * 0.6, cx, cy, haloR);
-    haloGrad.addColorStop(0, `hsla(${coreHue}, 60%, 50%, ${haloAlpha})`);
-    haloGrad.addColorStop(1, `hsla(${coreHue}, 60%, 30%, 0)`);
-    ctx.fillStyle = haloGrad;
-    ctx.fillRect(cx - haloR, cy - haloR, haloR * 2, haloR * 2);
-  }
-
-  /* Core bright point */
-  const coreR = (active ? 20 : 14) * pulse;
-  const corePulse = active ? 0.8 + 0.2 * Math.sin(time * 0.005) : 0.7 + 0.2 * Math.sin(time * 0.003);
-  const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
-  coreGrad.addColorStop(0, `hsla(${coreHue}, 100%, 92%, ${corePulse})`);
-  coreGrad.addColorStop(0.5, `hsla(${coreHue + 10}, 100%, 70%, ${corePulse * 0.4})`);
-  coreGrad.addColorStop(1, `hsla(${coreHue}, 100%, 60%, 0)`);
-  ctx.fillStyle = coreGrad;
-  ctx.fillRect(cx - coreR, cy - coreR, coreR * 2, coreR * 2);
-
-  /* Label */
-  ctx.fillStyle = `rgba(${active ? '210, 168, 255' : '136, 192, 255'}, ${0.35 + 0.1 * Math.sin(time * 0.002)})`;
-  ctx.font = '18px SF Mono, monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText(active ? 'NEBULA' : 'NML', cx / 2, cy / 2 + 80);
+  const coreR=(active?20:14)*pulse;
+  const corePulse=(active?0.8:0.7)+0.2*Math.sin(time*(active?0.005:0.003));
+  const cg=ctx.createRadialGradient(cx,cy,0,cx,cy,coreR);
+  cg.addColorStop(0,`hsla(${coreHue},100%,92%,${corePulse})`);
+  cg.addColorStop(0.5,`hsla(${coreHue+10},100%,70%,${corePulse*0.4})`);
+  cg.addColorStop(1,`hsla(${coreHue},100%,60%,0)`);
+  ctx.fillStyle=cg; ctx.fillRect(cx-coreR,cy-coreR,coreR*2,coreR*2);
+  ctx.fillStyle=`rgba(${active?'210,168,255':'136,192,255'},${0.35+0.1*Math.sin(time*0.002)})`;
+  ctx.font='18px SF Mono, monospace'; ctx.textAlign='center';
+  ctx.fillText(active?'NEBULA':'NML',cx/2,cy/2+80);
 }
 
 function drawOrbitingAgents(time) {
-  const agentList = Object.values(agents);
-  if (agentList.length === 0) return;
+  const agentList=Object.values(knownAgents);
+  if(agentList.length===0) return;
+  const cx=W/2,cy=H/2,sphereR=Math.min(cx,cy)*0.35,tilt=0.45,persp=600;
+  ctx.strokeStyle='rgba(88,166,255,0.04)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.ellipse(cx,cy,sphereR,sphereR*Math.sin(tilt),0,0,Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(cx,cy,sphereR*0.5,sphereR,0,0,Math.PI*2); ctx.stroke();
 
-  const cx = W / 2, cy = H / 2;
-  const sphereRadius = Math.min(cx, cy) * 0.35;
-  const tilt = 0.45;
-  const perspective = 600;
-
-  /* Faint sphere wireframe — equator + meridian */
-  ctx.strokeStyle = 'rgba(88, 166, 255, 0.04)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.ellipse(cx, cy, sphereRadius, sphereRadius * Math.sin(tilt), 0, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.ellipse(cx, cy, sphereRadius * 0.5, sphereRadius, 0, 0, Math.PI * 2);
-  ctx.stroke();
-
-  /* Sort agents by depth (z) for correct overlap */
-  const agentPositions = agentList.map((a, i) => {
-    const n = agentList.length;
-    const lonSpeed = 0.00025 + i * 0.00004;
-    const latSpeed = 0.00012 + i * 0.00003;
-    const lonOffset = (2 * Math.PI * i) / n;
-    const latOffset = (Math.PI * 0.3 * (i % 3 - 1)) + Math.PI * 0.5;
-
-    const lon = lonOffset + time * lonSpeed;
-    const lat = latOffset + Math.sin(time * latSpeed + i * 2.1) * 0.6;
-
-    const sx = Math.cos(lat) * Math.cos(lon);
-    const sy = Math.sin(lat) * Math.cos(tilt) + Math.cos(lat) * Math.sin(lon) * Math.sin(tilt);
-    const sz = -Math.cos(lat) * Math.sin(lon) * Math.cos(tilt) + Math.sin(lat) * Math.sin(tilt);
-
-    const scale = perspective / (perspective + sz * sphereRadius);
-    const x = cx + sx * sphereRadius * scale;
-    const y = cy + sy * sphereRadius * scale;
-    const depth = sz;
-
-    return { a, i, x, y, depth, scale };
+  const positions=agentList.map((a,i)=>{
+    const n=agentList.length;
+    const lon=(2*Math.PI*i/n)+time*(0.00025+i*0.00004);
+    const lat=(Math.PI*0.3*(i%3-1)+Math.PI*0.5)+Math.sin(time*(0.00012+i*0.00003)+i*2.1)*0.6;
+    const sx=Math.cos(lat)*Math.cos(lon);
+    const sy=Math.sin(lat)*Math.cos(tilt)+Math.cos(lat)*Math.sin(lon)*Math.sin(tilt);
+    const sz=-Math.cos(lat)*Math.sin(lon)*Math.cos(tilt)+Math.sin(lat)*Math.sin(tilt);
+    const scale=persp/(persp+sz*sphereR);
+    return {a,i,x:cx+sx*sphereR*scale,y:cy+sy*sphereR*scale,depth:sz,scale};
   });
+  positions.sort((a,b)=>a.depth-b.depth);
+  lastHitboxes=[];
 
-  agentPositions.sort((a, b) => a.depth - b.depth);
+  for(const {a,i,x,y,depth,scale} of positions){
+    a._x=x; a._y=y;
+    const isSelected=a.name===selectedAgent;
+    const hasSelection=selectedAgent!=null;
+    let da=0.4+0.6*((depth+1)/2);
+    if(hasSelection&&!isSelected) da*=0.4;
+    if(isSelected) da=1.0;
+    const s=isSelected?Math.max(scale,1.15):scale;
 
-  lastAgentHitboxes = [];
-
-  agentPositions.forEach(({ a, i, x: orbitX, y: orbitY, depth, scale }) => {
-
-    const isSelected = a.name === selectedAgentName;
-    const hasSelection = selectedAgentName != null;
-
-    /* Selected node locks to focus position (left-center of visible canvas area) */
-    let x, y;
-    if (isSelected) {
-      const targetX = W * 0.35;
-      const targetY = H * 0.45;
-      const t = focusAnimT;
-      const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-      x = orbitX + (targetX - orbitX) * ease;
-      y = orbitY + (targetY - orbitY) * ease;
-    } else {
-      x = orbitX;
-      y = orbitY;
-    }
-
-    a._drawX = x;
-    a._drawY = y;
-
-    const hasPrograms = a.programs_received > 0;
-    const isOracle = a.role === 'oracle';
-    const isSentient = a.role === 'sentient';
-    const isArchitect = a.role === 'architect';
-    const isEnforcer = a.role === 'enforcer';
-    const isHost = a.url === knownSeed;
-
-    /* Depth-based opacity — nodes behind the sphere are dimmer; unselected dim when something is selected */
-    let depthAlpha = 0.4 + 0.6 * ((depth + 1) / 2);
-    if (hasSelection && !isSelected) depthAlpha *= 0.4;
-    if (isSelected) depthAlpha = 1.0;
-    const s = isSelected ? Math.max(scale, 1.15) : scale;
-
-    /* Connection lines — oracle draws faint golden lines to ALL agents */
-    if (isOracle) {
-      for (const other of agentList) {
-        if (other.name !== a.name && other._drawX != null) {
-          ctx.beginPath();
-          ctx.moveTo(x, y);
-          ctx.lineTo(other._drawX, other._drawY);
-          ctx.strokeStyle = `rgba(210, 153, 34, ${0.04 * depthAlpha})`;
-          ctx.setLineDash([4, 4]);
-          ctx.lineWidth = 1;
-          ctx.stroke();
-          ctx.setLineDash([]);
-        }
-      }
-    } else {
-      for (const p of (a.peers || [])) {
-        const peer = agents[p.name];
-        if (peer && peer._drawX != null) {
-          ctx.beginPath();
-          ctx.moveTo(x, y);
-          ctx.lineTo(peer._drawX, peer._drawY);
-          ctx.strokeStyle = `rgba(88, 166, 255, ${0.06 * depthAlpha})`;
-          ctx.lineWidth = 1;
-          ctx.stroke();
+    /* Connection lines */
+    const isOracle=a.role==='oracle';
+    if(isOracle){
+      for(const other of agentList){
+        if(other.name!==a.name&&other._x!=null){
+          ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(other._x,other._y);
+          ctx.strokeStyle=`rgba(210,153,34,${0.05*da})`;ctx.setLineDash([4,4]);ctx.lineWidth=1;ctx.stroke();ctx.setLineDash([]);
         }
       }
     }
 
-    /* Host indicator — pulsing ring around "you" */
-    if (isHost) {
-      const ringAlpha = (0.3 + 0.2 * Math.sin(time * 0.004)) * depthAlpha;
-      const ringR = (20 + 3 * Math.sin(time * 0.003)) * s;
-      ctx.beginPath();
-      ctx.arc(x, y, ringR, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(255, 255, 255, ${ringAlpha})`;
-      ctx.lineWidth = 2 * s;
-      ctx.stroke();
-    }
+    /* Glow */
+    const hueMap={sentient:280,oracle:38,architect:174,enforcer:0,custodian:220,herald:260,emissary:35,worker:140};
+    const gh=hueMap[a.role]||(assessments.length>0?140:220);
+    const glowR=(28+4*Math.sin(time*0.004+i))*s;
+    const glow=ctx.createRadialGradient(x,y,0,x,y,glowR);
+    const ga=(isOracle?0.5:0.4)*da;
+    glow.addColorStop(0,`hsla(${gh},80%,60%,${ga})`);
+    glow.addColorStop(1,`hsla(${gh},80%,40%,0)`);
+    ctx.fillStyle=glow; ctx.fillRect(x-glowR,y-glowR,glowR*2,glowR*2);
 
-    /* Agent glow */
-    const glowHue = isEnforcer ? 0 : (isArchitect ? 174 : (isOracle ? 38 : (isSentient ? 280 : (hasPrograms ? 140 : 220))));
-    const baseGlowR = isOracle ? 34 : (isHost ? 32 : 28);
-    const glowR = (baseGlowR + (isHost ? 6 : 4) * Math.sin(time * 0.004 + i)) * s;
-    const glowAlpha = (isHost ? 0.6 : (isOracle ? 0.5 : 0.4)) * depthAlpha;
-    const glow = ctx.createRadialGradient(x, y, 0, x, y, glowR);
-    glow.addColorStop(0, `hsla(${glowHue}, ${isOracle ? 90 : 80}%, 60%, ${glowAlpha})`);
-    glow.addColorStop(1, `hsla(${glowHue}, ${isOracle ? 90 : 80}%, 40%, 0)`);
-    ctx.fillStyle = glow;
-    ctx.fillRect(x - glowR, y - glowR, glowR * 2, glowR * 2);
+    /* Dot */
+    const dotR=(isOracle?10:8)*s;
+    ctx.beginPath(); ctx.arc(x,y,dotR,0,Math.PI*2);
+    ctx.fillStyle=roleColor(a.role)||'#58a6ff';
+    ctx.globalAlpha=da; ctx.fill();
+    ctx.strokeStyle=`rgba(255,255,255,${0.3*da})`; ctx.lineWidth=1.5*s; ctx.stroke();
+    ctx.globalAlpha=1.0;
 
-    /* Agent dot — scales with perspective */
-    const baseDotR = isHost ? 11 : (isOracle ? 10 : 8);
-    const dotR = baseDotR * s;
-    ctx.beginPath();
-    ctx.arc(x, y, dotR, 0, Math.PI * 2);
-    ctx.fillStyle = isEnforcer ? '#da3633' : (isArchitect ? '#38ada9' : (isOracle ? '#d29922' : (isSentient ? '#d2a8ff' : (hasPrograms ? '#3fb950' : '#58a6ff'))));
-    ctx.globalAlpha = depthAlpha;
-    ctx.fill();
-    ctx.strokeStyle = isHost ? `rgba(255,255,255,${0.6 * depthAlpha})` : `rgba(255,255,255,${0.3 * depthAlpha})`;
-    ctx.lineWidth = (isHost ? 2.5 : 1.5) * s;
-    ctx.stroke();
-    ctx.globalAlpha = 1.0;
-
-    /* Labels only for nodes in front half (not obscured behind nebula) */
-    if (depth > -0.3) {
-      const fontSize = Math.round(16 * s);
-      ctx.fillStyle = isHost ? `rgba(255,255,255,${depthAlpha})` : `rgba(201,209,217,${depthAlpha})`;
-      ctx.font = `${isHost ? 'bold ' : ''}${fontSize}px SF Mono, monospace`;
-      ctx.textAlign = 'center';
-      ctx.fillText(a.name, x, y + 22 * s + dotR);
-
-      if (isHost) {
-        const youSize = Math.round(11 * s);
-        ctx.fillStyle = `rgba(255, 255, 255, ${0.4 * depthAlpha})`;
-        ctx.font = `${youSize}px SF Mono, monospace`;
-        ctx.fillText('(you)', x, y + 22 * s + dotR + youSize + 2);
-      }
-
-      const scoreYOff = isHost ? (22 * s + dotR + 24 * s) : (22 * s + dotR + 14 * s);
-      if (a.last_result?.score != null) {
-        const scoreFontSize = Math.round(14 * s);
-        ctx.fillStyle = a.last_result.score >= 0.5 ? '#f85149' : '#3fb950';
-        ctx.globalAlpha = depthAlpha;
-        ctx.font = `bold ${scoreFontSize}px SF Mono, monospace`;
-        ctx.fillText(a.last_result.score.toFixed(3), x, y + scoreYOff);
-        ctx.globalAlpha = 1.0;
-      } else if (isEnforcer && !isHost) {
-        const tagSize = Math.round(11 * s);
-        ctx.fillStyle = `rgba(218, 54, 51, ${0.5 * depthAlpha})`;
-        ctx.font = `${tagSize}px SF Mono, monospace`;
-        ctx.fillText('enforcing', x, y + scoreYOff);
-      } else if (isArchitect && !isHost) {
-        const tagSize = Math.round(11 * s);
-        ctx.fillStyle = `rgba(56, 173, 169, ${0.5 * depthAlpha})`;
-        ctx.font = `${tagSize}px SF Mono, monospace`;
-        ctx.fillText('building', x, y + scoreYOff);
-      } else if (isOracle && !isHost) {
-        const tagSize = Math.round(11 * s);
-        ctx.fillStyle = `rgba(210, 153, 34, ${0.5 * depthAlpha})`;
-        ctx.font = `${tagSize}px SF Mono, monospace`;
-        ctx.fillText('observing', x, y + scoreYOff);
+    /* Label */
+    if(depth>-0.3){
+      const fs=Math.round(16*s);
+      ctx.fillStyle=`rgba(201,209,217,${da})`;
+      ctx.font=`${fs}px SF Mono,monospace`; ctx.textAlign='center';
+      ctx.fillText(a.name,x,y+22*s+dotR);
+      /* Score below name */
+      const vote=liveAgentVotes[a.name];
+      if(vote!=null){
+        const scoreStr=vote.score.toFixed(3)+(vote.outlier?' ⚠':'');
+        ctx.fillStyle=vote.outlier?`rgba(248,81,73,${da})`:`rgba(63,185,80,${da})`;
+        ctx.font=`bold ${Math.round(14*s)}px SF Mono,monospace`;
+        ctx.fillText(scoreStr,x,y+38*s+dotR);
+      } else if(a.role==='enforcer'){
+        ctx.fillStyle=`rgba(218,54,51,${0.5*da})`;
+        ctx.font=`${Math.round(11*s)}px SF Mono,monospace`;
+        ctx.fillText('enforcing',x,y+38*s+dotR);
+      } else if(a.role==='oracle'){
+        ctx.fillStyle=`rgba(210,153,34,${0.5*da})`;
+        ctx.font=`${Math.round(11*s)}px SF Mono,monospace`;
+        ctx.fillText('observing',x,y+38*s+dotR);
       }
     }
 
-    /* Data streams to/from nebula */
-    if (hasPrograms && Math.random() < 0.008) {
-      dataStreams.push(new DataStream(x, y, cx, cy));
-    }
-    if (hasPrograms && Math.random() < 0.005) {
-      dataStreams.push(new DataStream(cx, cy, x, y));
-    }
+    /* Data streams when assessments exist */
+    if(assessments.length>0&&Math.random()<0.006) dataStreams.push(new DataStream(x,y,W/2,H/2,gh));
+    if(assessments.length>0&&Math.random()<0.004) dataStreams.push(new DataStream(W/2,H/2,x,y,gh));
 
-    /* Store hitbox for click detection (in zoomed canvas coords) */
-    const hitR = Math.max(dotR, 18) * zoomLevel;
-    const hx = (x - W / 2) * zoomLevel + W / 2;
-    const hy = (y - H / 2) * zoomLevel + H / 2;
-    lastAgentHitboxes.push({ name: a.name, x: hx, y: hy, r: hitR });
-  });
+    /* Hitbox */
+    const hitR=Math.max(dotR,18)*zoomLevel;
+    const hx=(x-W/2)*zoomLevel+W/2, hy=(y-H/2)*zoomLevel+H/2;
+    lastHitboxes.push({name:a.name,x:hx,y:hy,r:hitR});
+  }
 }
 
 function render(time) {
-  ctx.clearRect(0, 0, W, H);
+  ctx.clearRect(0,0,W,H);
+  const bg=ctx.createRadialGradient(W/2,H/2,0,W/2,H/2,W/2);
+  bg.addColorStop(0,'#0a0e1a'); bg.addColorStop(1,'#05080f');
+  ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
 
-  /* Deep space background */
-  const bgGrad = ctx.createRadialGradient(W/2, H/2, 0, W/2, H/2, W/2);
-  bgGrad.addColorStop(0, '#0a0e1a');
-  bgGrad.addColorStop(1, '#05080f');
-  ctx.fillStyle = bgGrad;
-  ctx.fillRect(0, 0, W, H);
-
-  /* Distant stars (unzoomed) */
-  if (frame === 0) {
-    window._stars = [];
-    for (let i = 0; i < 200; i++) {
-      window._stars.push({
-        x: Math.random() * W,
-        y: Math.random() * H,
-        r: 0.3 + Math.random() * 1.2,
-        b: 0.2 + Math.random() * 0.5,
-        s: 0.5 + Math.random() * 2,
-      });
-    }
+  if(frame===0){
+    window._stars=[];
+    for(let i=0;i<200;i++) window._stars.push({x:Math.random()*W,y:Math.random()*H,r:0.3+Math.random()*1.2,b:0.2+Math.random()*0.5,s:0.5+Math.random()*2});
   }
-  for (const star of (window._stars || [])) {
-    const twinkle = star.b + 0.15 * Math.sin(time * 0.001 * star.s + star.x);
-    ctx.beginPath();
-    ctx.arc(star.x, star.y, star.r, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(200, 220, 255, ${twinkle})`;
-    ctx.fill();
+  for(const st of(window._stars||[])){
+    const tw=st.b+0.15*Math.sin(time*0.001*st.s+st.x);
+    ctx.beginPath();ctx.arc(st.x,st.y,st.r,0,Math.PI*2);ctx.fillStyle=`rgba(200,220,255,${tw})`;ctx.fill();
   }
 
-  /* Apply zoom — translate to center, scale, translate back */
   ctx.save();
-  ctx.translate(W / 2, H / 2);
-  ctx.scale(zoomLevel, zoomLevel);
-  ctx.translate(-W / 2, -H / 2);
-
-  /* Nebula core */
+  ctx.translate(W/2,H/2); ctx.scale(zoomLevel,zoomLevel); ctx.translate(-W/2,-H/2);
   drawNebula(time);
-
-  /* Particles */
-  const dt = 0.016;
-  for (const p of particles) { p.update(dt); p.draw(ctx); }
-
-  /* Data streams */
-  for (let i = dataStreams.length - 1; i >= 0; i--) {
-    if (!dataStreams[i].update()) { dataStreams.splice(i, 1); continue; }
-    dataStreams[i].draw(ctx);
-  }
-
-  /* Orbiting agents */
+  for(const p of particles){p.update(0.016);p.draw(ctx);}
+  for(let i=dataStreams.length-1;i>=0;i--){if(!dataStreams[i].update()){dataStreams.splice(i,1);continue;}dataStreams[i].draw(ctx);}
   drawOrbitingAgents(time);
-
   ctx.restore();
-
-  /* Update focus panel live */
-  if (selectedAgentName && agents[selectedAgentName]) {
-    if (focusAnimT < 1) focusAnimT = Math.min(1, focusAnimT + 0.04);
-    if (frame % 30 === 0) updateFocusPanel();
-  }
 
   frame++;
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
 
-/* ═══════════════════════════════════════════
-   WEBSOCKET + DATA
-   ═══════════════════════════════════════════ */
-function applyRoleLayout(role) {
-  if (roleApplied) return;
-  roleApplied = true;
-  hostRole = role;
-
-  const show = (id) => document.getElementById(id)?.classList.remove('section-hidden');
-  const hide = (id) => document.getElementById(id)?.classList.add('section-hidden');
-
-  const headerEl = document.querySelector('.header h1');
-  const roleLabels = { sentient: 'Sentient', worker: 'Worker', oracle: 'Oracle', architect: 'Architect', enforcer: 'Enforcer' };
-  if (headerEl && roleLabels[role]) {
-    headerEl.innerHTML = `NML Collective <span class="role-header-badge ${role}">${roleLabels[role]}</span>`;
-  }
-
-  if (role === 'sentient') {
-    show('sectionNebula');
-    show('sectionWorkerResults');
-    hide('sectionDataSubmit');
-    show('sectionOracle');
-    hide('sectionRecommend');
-  } else if (role === 'worker') {
-    show('sectionWorkerResults');
-    hide('sectionNebula');
-    show('sectionDataSubmit');
-    show('sectionOracle');
-    hide('sectionRecommend');
-  } else if (role === 'oracle') {
-    hide('sectionWorkerResults');
-    hide('sectionDataSubmit');
-    hide('sectionArchitect');
-    show('sectionOracle');
-    show('sectionRecommend');
-    show('sectionNebula');
-    document.getElementById('actionBar').style.display = 'none';
-    fetchRecommendations();
-  } else if (role === 'architect') {
-    hide('sectionWorkerResults');
-    hide('sectionDataSubmit');
-    hide('sectionEnforcer');
-    show('sectionArchitect');
-    show('sectionOracle');
-    hide('sectionRecommend');
-    hide('sectionNebula');
-    document.getElementById('actionBar').style.display = 'none';
-    fetchCatalog();
-  } else if (role === 'enforcer') {
-    hide('sectionWorkerResults');
-    hide('sectionDataSubmit');
-    hide('sectionArchitect');
-    show('sectionEnforcer');
-    show('sectionOracle');
-    hide('sectionRecommend');
-    show('sectionNebula');
-    document.getElementById('actionBar').style.display = 'none';
-    fetchThreats();
-  }
-}
-
-function connectToAgent() {
-  const url = document.getElementById('seedInput').value.trim();
-  if (!url) return;
-  knownSeed = url;
-  connectWS(url);
-}
-
-function connectWS(agentUrl) {
-  const wsUrl = agentUrl.replace('http://', 'ws://').replace('https://', 'wss://') + '/ws';
-  if (wsConnections[wsUrl]) return;
-  const ws = new WebSocket(wsUrl);
-  wsConnections[wsUrl] = ws;
-  ws.onmessage = (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      if (data.state) {
-        const state = data.state;
-        agents[state.name] = { ...state, url: agentUrl, lastPoll: Date.now() };
-
-        if (agentUrl === knownSeed && state.role && !roleApplied) {
-          applyRoleLayout(state.role);
-        }
-
-        if (state.recent_events) {
-          for (const ev of state.recent_events) {
-            const key = state.name + ':' + ev.time + ':' + ev.type;
-            if (!allEvents.find(x => x.key === key)) allEvents.push({ ...ev, agent: state.name, key });
-          }
-        }
-        for (const p of state.peers || []) {
-          if (p.url && !wsConnections[p.url.replace('http://','ws://') + '/ws']) connectWS(p.url);
-        }
-      }
-      updateSidebar();
-    } catch (err) {}
-  };
-  ws.onclose = () => { delete wsConnections[wsUrl]; setTimeout(() => { if (knownSeed) connectWS(agentUrl); }, 3000); };
-  ws.onerror = () => {};
-}
-
-function updateSidebar() {
-  const agentList = Object.values(agents);
-  document.getElementById('statusText').textContent = agentList.length + ' agent' + (agentList.length !== 1 ? 's' : '') + ' in collective';
-
-  /* ─── Agent Cards ─── */
-  let cards = '';
-  for (const a of agentList) {
-    const score = a.last_result?.score;
-    const scoreClass = score != null ? (score >= 0.5 ? 'high' : 'low') : '';
-    const scoreText = score != null ? score.toFixed(4) : '-';
-    const isThisHost = a.url === knownSeed;
-    const roleBadge = a.role ? `<span class="role-badge ${a.role}">${a.role}</span>` : '';
-    const youBadge = isThisHost ? '<span style="font-size:9px;color:#8b949e;margin-left:4px">(you)</span>' : '';
-    let metaExtra = '';
-    if (hostRole === 'oracle') {
-      metaExtra = ` · ${a.has_local_data ? 'has data' : 'no data'}`;
-      if (a.udp_enabled) metaExtra += ' · udp';
-      if (a.relay_connected) metaExtra += ' · relay';
-    }
-    const cardBorder = isThisHost ? 'border-color:rgba(255,255,255,0.25)' : '';
-    cards += `<div class="agent-card fp-clickable" style="${cardBorder};cursor:pointer" onclick="selectAgent('${a.name}')"><div class="name">${a.name}${roleBadge}${youBadge}</div><div class="meta">${a.peer_count} peers · ${a.programs_received} prog · ${Math.round(a.uptime_seconds)}s${metaExtra}</div><div class="score ${scoreClass}">${scoreText}</div></div>`;
-  }
-  document.getElementById('agentCards').innerHTML = cards || '<div style="color:#484f58;font-size:11px;padding:20px 0;text-align:center">No agents</div>';
-
-  /* ─── Worker: My Results ─── */
-  if (hostRole === 'worker' || hostRole === 'sentient') {
-    const hostAgent = agentList.find(a => a.url === knownSeed);
-    if (hostAgent && hostAgent.last_result) {
-      const r = hostAgent.last_result;
-      const score = r.score;
-      const scoreColor = score != null ? (score >= 0.5 ? '#f85149' : '#3fb950') : '#8b949e';
-      document.getElementById('workerResults').innerHTML = `
-        <div class="worker-results fp-clickable" onclick="showExecutionDetail('${r.hash}')" style="cursor:pointer">
-          <div class="wr-label">Latest Execution</div>
-          <div class="wr-score" style="color:${scoreColor}">${score != null ? score.toFixed(4) : 'no score'}</div>
-          <div class="wr-hash">hash: ${r.hash || '?'} · exit: ${r.exit_code ?? '?'} · ${r.success ? 'success' : 'failed'}</div>
-        </div>
-      `;
-    }
-  }
-
-  /* ─── Nebula stats ─── */
-  const sentient = agentList.find(a => a.nebula_stats);
-  if (sentient && sentient.nebula_stats) {
-    const ns = sentient.nebula_stats;
-    window._nebulaActive = ns.quarantine_pending > 0;
-    const sUrl = sentient.url || knownSeed;
-    let nebulaHTML = `
-      <div class="nebula-stat"><span>Programs</span><span class="val">${ns.programs}</span></div>
-      <div class="nebula-stat fp-clickable" style="cursor:pointer" onclick="showDataPool('${sUrl}')"><span>Data approved</span><span class="val">${ns.data_approved} →</span></div>
-      <div class="nebula-stat"><span>Data rejected</span><span class="val">${ns.data_rejected}</span></div>
-      <div class="nebula-stat fp-clickable" style="cursor:pointer" onclick="showQuarantineList('${sUrl}')"><span>Quarantine pending</span><span class="val">${ns.quarantine_pending} →</span></div>
-      <div class="nebula-stat"><span>Executions</span><span class="val">${ns.executions}</span></div>
-      <div class="nebula-stat"><span>Ledger entries</span><span class="val">${ns.ledger_entries}</span></div>
-    `;
-    document.getElementById('nebulaStats').innerHTML = nebulaHTML;
-
-    if (hostRole === 'sentient' && ns.quarantine_pending > 0) {
-      fetchQuarantine(sentient.url || knownSeed);
-    }
-  } else {
-    window._nebulaActive = false;
-  }
-
-  /* ─── Oracle section — only update stats, never touch input/answer ─── */
-  const oracleAgent = agentList.find(a => a.role === 'oracle');
-  const isHostOracle = hostRole === 'oracle';
-  const oracleUrl = isHostOracle ? knownSeed : (oracleAgent ? oracleAgent.url : null);
-  window._oracleUrl = oracleUrl;
-
-  if (isHostOracle) {
-    const hostAgent = agentList.find(a => a.url === knownSeed);
-    const os = hostAgent?.oracle_stats || {};
-    document.getElementById('oracleStats').innerHTML = `
-      <div class="oracle-stat"><span>Agents tracked</span><span class="val">${os.collective_size || 0}</span></div>
-      <div class="oracle-stat"><span>Events tracked</span><span class="val">${os.events_tracked || 0}</span></div>
-      <div class="oracle-stat"><span>Programs known</span><span class="val">${os.programs_known || 0}</span></div>
-      <div class="oracle-stat"><span>LLM</span><span class="val">${os.llm_connected ? 'connected' : 'none'}</span></div>
-      <div class="oracle-stat"><span>Poll cycles</span><span class="val">${os.poll_count || 0}</span></div>
-    `;
-    document.getElementById('oracleInteractive').style.display = '';
-    document.getElementById('oracleInput').placeholder = 'Ask me anything about the collective...';
-  } else if (oracleAgent && oracleAgent.oracle_stats) {
-    const os = oracleAgent.oracle_stats;
-    document.getElementById('oracleStats').innerHTML = `
-      <div class="oracle-stat"><span>Agents tracked</span><span class="val">${os.collective_size}</span></div>
-      <div class="oracle-stat"><span>Events tracked</span><span class="val">${os.events_tracked}</span></div>
-      <div class="oracle-stat"><span>LLM</span><span class="val">${os.llm_connected ? 'connected' : 'none'}</span></div>
-    `;
-    document.getElementById('oracleInteractive').style.display = '';
-    document.getElementById('oracleInput').placeholder = 'Ask the Oracle...';
-  } else {
-    document.getElementById('oracleStats').innerHTML = '<div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No oracle in collective</div>';
-    document.getElementById('oracleInteractive').style.display = 'none';
-  }
-
-  /* ─── Enforcer section ─── */
-  const enforcerAgent = agentList.find(a => a.role === 'enforcer');
-  if (enforcerAgent && enforcerAgent.enforcer_stats) {
-    const es = enforcerAgent.enforcer_stats;
-    const warnClass = es.warnings > 0 ? '' : 'clear';
-    const qClass = es.quarantined > 0 ? '' : 'clear';
-    document.getElementById('enforcerStats').innerHTML = `
-      <div class="enforcer-stat"><span>Warnings</span><span class="val ${warnClass}">${es.warnings}</span></div>
-      <div class="enforcer-stat"><span>Quarantined</span><span class="val ${qClass}">${es.quarantined}</span></div>
-      <div class="enforcer-stat"><span>Blacklisted</span><span class="val ${es.blacklisted > 0 ? '' : 'clear'}">${es.blacklisted}</span></div>
-      <div class="enforcer-stat"><span>Monitor cycles</span><span class="val clear">${es.monitor_cycles}</span></div>
-    `;
-  }
-
-  /* ─── Architect section ─── */
-  const architectAgent = agentList.find(a => a.role === 'architect');
-  if (architectAgent && architectAgent.architect_stats) {
-    const as = architectAgent.architect_stats;
-    document.getElementById('architectStats').innerHTML = `
-      <div class="architect-stat"><span>Programs built</span><span class="val">${as.programs_built}</span></div>
-      <div class="architect-stat"><span>Catalog size</span><span class="val">${as.catalog_size}</span></div>
-      <div class="architect-stat"><span>LLM</span><span class="val">${as.llm_connected ? 'connected' : 'none'}</span></div>
-    `;
-  }
-
-  /* ─── Event Feed ─── */
-  allEvents.sort((a, b) => b.time - a.time);
-  let filteredEvents = allEvents;
-  if (hostRole === 'worker') {
-    filteredEvents = allEvents.filter(e =>
-      e.type.includes('program') || e.type.includes('executed') ||
-      e.type.includes('peer') || e.type.includes('data') ||
-      e.type.includes('udp') || e.type.includes('consensus')
-    );
-  }
-  const eventLimit = hostRole === 'oracle' ? 60 : 30;
-  let feed = '';
-  for (const e of filteredEvents.slice(0, eventLimit)) {
-    feed += `<div class="event-item"><span class="time">${e.time.toFixed(1)}s</span><span class="type ${e.type}">${e.type}</span><span class="detail">[${e.agent}] ${e.detail}</span></div>`;
-  }
-  document.getElementById('eventFeed').innerHTML = feed || '<div style="color:#484f58;font-size:11px;padding:20px 0;text-align:center">No events</div>';
-}
-
-async function submitProgram() {
-  if (!knownSeed) return;
-  const program = `LD    R1 @w1\nLD    R2 @b1\nLD    R3 @w2\nLD    R4 @b2\nLD    R0 @training_data\nLD    R9 @training_labels\nTNET  #1000  #0.01  #0\nST    R8 @training_loss\nLD    R0 @new_transaction\nMMUL  R5 R0 R1\nMADD  R5 R5 R2\nRELU  R5 R5\nMMUL  R6 R5 R3\nMADD  R6 R6 R4\nSIGM  RA R6\nST    RA @fraud_score\nCMPI  RE RA #0.5\nJMPF  #2\nLEAF  RB #0.0\nJUMP  #1\nLEAF  RB #1.0\nST    RB @decision\nHALT`;
-  try { await fetch(knownSeed + '/submit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ program }) }); } catch (e) {}
-}
-
-async function askOracle() {
-  const url = window._oracleUrl;
-  if (!url) return;
-  const input = document.getElementById('oracleInput');
-  const question = input.value.trim();
-  if (!question) return;
-  input.value = '';
-  document.getElementById('oracleAnswer').innerHTML = '<div class="oracle-answer"><div class="llm-tag">thinking...</div></div>';
-  try {
-    const resp = await fetch(url + '/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question }) });
-    const data = await resp.json();
-    const tag = data.llm ? 'LLM reasoning' : 'structured data';
-    document.getElementById('oracleAnswer').innerHTML = `<div class="oracle-answer"><div class="llm-tag">${tag}</div>${data.answer || data.error}</div>`;
-  } catch (e) {
-    document.getElementById('oracleAnswer').innerHTML = `<div class="oracle-answer"><div class="llm-tag">error</div>${e.message}</div>`;
-  }
-}
-
-/* ─── Sentient: Quarantine Management ─── */
-async function fetchQuarantine(sentientUrl) {
-  try {
-    const resp = await fetch(sentientUrl + '/data/quarantine');
-    const data = await resp.json();
-    const pending = data.pending || [];
-    if (pending.length === 0) {
-      document.getElementById('quarantineList').innerHTML = '';
-      return;
-    }
-    let html = '';
-    for (const item of pending) {
-      const ctx = item.meta?.context;
-      const ctxLine = ctx ? `<div style="color:#58a6ff;font-size:9px;margin-top:2px">${ctx.domain || ''} ${(ctx.tags || []).map(t => '#' + t).join(' ')}</div>` : '';
-      const descLine = ctx?.description ? `<div style="color:#8b949e;font-size:9px;margin-top:1px">${ctx.description}</div>` : '';
-
-      let votesHTML = '';
-      for (const v of (item.votes || [])) {
-        const vc = v.vote === 'approve' ? '#3fb950' : '#f85149';
-        const roleTag = v.role === 'oracle' ? ' (oracle)' : '';
-        votesHTML += `<div style="font-size:9px;color:${vc};margin-top:2px">${v.vote}${roleTag}: ${v.reason || v.voter}</div>`;
-        if (v.analysis) {
-          const a = v.analysis;
-          votesHTML += `<div style="font-size:9px;color:#6e7681;margin-left:8px">score=${a.score} · ${a.checks?.filter(c => !c.passed).map(c => c.detail || c.name).join(', ') || 'all checks passed'}</div>`;
-        }
-      }
-
-      html += `<div class="quarantine-item fp-clickable" onclick="showQuarantineDetail('${item.hash}')" style="cursor:pointer">
-        <span class="q-name">@${item.meta?.name || '?'}</span>
-        <span class="q-meta"> · ${item.author} · ${item.content_size}B · ${item.votes?.length || 0} vote(s)</span>
-        ${ctxLine}${descLine}${votesHTML}
-        <div style="margin-top:4px" onclick="event.stopPropagation()">
-          <button class="q-approve" onclick="quarantineAction('${sentientUrl}','${item.hash}','approve')">Approve</button>
-          <button class="q-reject" onclick="quarantineAction('${sentientUrl}','${item.hash}','reject')">Reject</button>
-        </div>
-      </div>`;
-    }
-    document.getElementById('quarantineList').innerHTML = html;
-  } catch (e) {}
-}
-
-async function quarantineAction(sentientUrl, hash, action) {
-  try {
-    await fetch(sentientUrl + '/data/' + action, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hash, reason: 'dashboard ' + action }),
-    });
-  } catch (e) {}
-}
-
-/* ─── Worker: Data Submission ─── */
-async function submitData() {
-  if (!knownSeed) return;
-  const name = document.getElementById('dataName').value.trim();
-  const content = document.getElementById('dataContent').value.trim();
-  if (!name || !content) return;
-
-  const desc = document.getElementById('dataDescription').value.trim();
-  const domain = document.getElementById('dataDomain').value.trim();
-  const tags = document.getElementById('dataTags').value.trim().split(',').map(t => t.trim()).filter(Boolean);
-  const features = document.getElementById('dataFeatures').value.trim().split(',').map(f => f.trim()).filter(Boolean);
-
-  const context = {};
-  if (desc) context.description = desc;
-  if (domain) context.domain = domain;
-  if (tags.length) context.tags = tags;
-  if (features.length) context.features = features;
-  context.source = 'dashboard';
-
-  const payload = { name, content };
-  if (Object.keys(context).length > 1) payload.context = context;
-
-  const sentientUrl = findSentientUrl() || knownSeed;
-  try {
-    const resp = await fetch(sentientUrl + '/data/submit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const data = await resp.json();
-    const statusColor = data.status === 'approved' ? '#3fb950' : (data.status === 'rejected' ? '#f85149' : '#d29922');
-    let resultHTML = `<div style="margin-top:4px;font-size:10px;color:${statusColor}">hash: ${data.hash} · status: ${data.status}</div>`;
-    if (data.oracle_vote) {
-      const ov = data.oracle_vote;
-      const voteColor = ov.vote === 'approve' ? '#3fb950' : (ov.vote === 'reject' ? '#f85149' : '#d29922');
-      resultHTML += `<div style="margin-top:2px;font-size:10px;color:${voteColor}">Oracle vote: ${ov.vote} (score: ${ov.analysis?.score})</div>`;
-    }
-    document.getElementById('dataSubmitResult').innerHTML = resultHTML;
-    document.getElementById('dataName').value = '';
-    document.getElementById('dataContent').value = '';
-    document.getElementById('dataDescription').value = '';
-    document.getElementById('dataDomain').value = '';
-    document.getElementById('dataTags').value = '';
-    document.getElementById('dataFeatures').value = '';
-  } catch (e) {
-    document.getElementById('dataSubmitResult').innerHTML =
-      `<div style="margin-top:4px;font-size:10px;color:#f85149">Error: ${e.message}</div>`;
-  }
-}
-
-function findSentientUrl() {
-  for (const a of Object.values(agents)) {
-    if (a.role === 'sentient') return a.url;
-  }
-  return null;
-}
-
-/* ─── Oracle: Recommendations ─── */
-async function fetchRecommendations() {
-  if (!knownSeed) return;
-  try {
-    const resp = await fetch(knownSeed + '/recommend');
-    const data = await resp.json();
-    const recs = data.recommendations || [];
-    if (recs.length === 0) {
-      document.getElementById('oracleRecommendations').innerHTML =
-        '<div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No recommendations yet</div>';
-      return;
-    }
-    let html = '';
-    for (const r of recs) {
-      html += `<div class="oracle-recommend">
-        <span class="rec-severity ${r.severity}">${r.severity}</span>
-        <span class="rec-category">${r.category}</span>
-        <div style="margin-top:3px;color:#c9d1d9">${r.message}</div>
-      </div>`;
-    }
-    document.getElementById('oracleRecommendations').innerHTML = html;
-  } catch (e) {
-    document.getElementById('oracleRecommendations').innerHTML =
-      `<div style="color:#f85149;font-size:10px;padding:10px 0">Error fetching recommendations</div>`;
-  }
-}
-
-/* ─── Enforcer: Threat Board ─── */
-async function fetchThreats() {
-  if (!knownSeed) return;
-  try {
-    const resp = await fetch(knownSeed + '/threats');
-    const data = await resp.json();
-    let html = '';
-
-    for (const [name, w] of Object.entries(data.warnings || {})) {
-      html += `<div class="threat-item fp-clickable" onclick="showThreatDetail('${name}')" style="cursor:pointer"><span class="thr-name warning">${name}</span><span class="thr-meta"> · ${w.count} warning(s) · ${w.latest}</span></div>`;
-    }
-    for (const [name, q] of Object.entries(data.quarantined || {})) {
-      const mins = Math.round(q.remaining_seconds / 60);
-      html += `<div class="threat-item fp-clickable" onclick="showThreatDetail('${name}')" style="cursor:pointer"><span class="thr-name quarantined">${name}</span><span class="thr-meta"> · QUARANTINED · ${mins}m left</span><span onclick="event.stopPropagation()"><button class="thr-lift" onclick="liftQuarantine('${name}')">Lift</button></span></div>`;
-    }
-    for (const [name, b] of Object.entries(data.blacklisted || {})) {
-      html += `<div class="threat-item fp-clickable" onclick="showThreatDetail('${name}')" style="cursor:pointer"><span class="thr-name blacklisted">${name}</span><span class="thr-meta"> · BLACKLISTED · by ${b.approved_by}</span></div>`;
-    }
-
-    document.getElementById('threatBoard').innerHTML = html || '<div style="color:#3fb950;font-size:11px;padding:10px 0;text-align:center">All clear</div>';
-  } catch (e) {}
-}
-
-async function quarantineNode(name) {
-  if (!knownSeed) return;
-  try {
-    await fetch(knownSeed + '/quarantine/node', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agent: name, reason: 'dashboard action' }),
-    });
-    fetchThreats();
-  } catch (e) {}
-}
-
-async function liftQuarantine(name) {
-  if (!knownSeed) return;
-  try {
-    await fetch(knownSeed + '/quarantine/lift', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agent: name }),
-    });
-    fetchThreats();
-  } catch (e) {}
-}
-
-/* ─── Architect: Catalog ─── */
-async function fetchCatalog() {
-  if (!knownSeed) return;
-  try {
-    const resp = await fetch(knownSeed + '/catalog');
-    const data = await resp.json();
-    const catalog = data.catalog || [];
-    if (catalog.length === 0) {
-      document.getElementById('architectCatalog').innerHTML =
-        '<div style="color:#484f58;font-size:11px;padding:10px 0;text-align:center">No programs built yet</div>';
-      return;
-    }
-    let html = '';
-    for (const item of catalog) {
-      const statusClass = item.status === 'valid' ? 'cat-valid' : 'cat-invalid';
-      html += `<div class="catalog-item">
-        <span class="cat-hash">${item.hash}</span>
-        <span class="${statusClass}"> · ${item.status}</span>
-        <span class="cat-meta"> · ${item.byte_size}B${item.fits_udp ? '' : ' (too large for UDP)'}</span>
-        <div class="cat-meta" style="margin-top:2px">${item.intent || ''}</div>
-      </div>`;
-    }
-    document.getElementById('architectCatalog').innerHTML = html;
-  } catch (e) {}
-}
-
-async function requestConsensus() {
-  if (!knownSeed) return;
-  try {
-    const resp = await fetch(knownSeed + '/consensus', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ strategy: 'median' }) });
-    const data = await resp.json();
-    if (data.consensus != null) {
-      const bar = document.getElementById('consensusBar');
-      bar.style.display = 'block';
-      document.getElementById('consensusValue').textContent = data.consensus.toFixed(4);
-
-      let meta = `${data.strategy} · ${data.count} agents`;
-      if (data.weighted) meta += ' · weighted';
-      document.getElementById('consensusStrategy').textContent = meta;
-
-      let extra = '';
-
-      if (data.raw_consensus != null && data.weighted) {
-        extra += `<div class="raw-value">raw: ${data.raw_consensus.toFixed(4)}</div>`;
-      }
-
-      if (data.assessment) {
-        const a = data.assessment;
-        extra += `<span class="confidence-badge ${a.confidence}">${a.confidence} confidence</span>`;
-        extra += `<div class="consensus-assessment">${a.confidence_reason}</div>`;
-        if (a.outliers && a.outliers.length > 0) {
-          for (const o of a.outliers) {
-            extra += `<div class="consensus-outlier">outlier: ${o.agent} = ${o.score} (z=${o.z_score}, ${o.direction})</div>`;
-          }
-        }
-        if (a.recommendation) {
-          extra += `<div class="consensus-assessment" style="color:#d29922">${a.recommendation}</div>`;
-        }
-      }
-
-      if (data.weights) {
-        const wList = Object.entries(data.weights).map(([n, w]) => `${n}=${w}`).join(', ');
-        extra += `<div class="consensus-weights">weights: ${wList}</div>`;
-      }
-
-      let existingExtra = bar.querySelector('.consensus-extra');
-      if (!existingExtra) {
-        existingExtra = document.createElement('div');
-        existingExtra.className = 'consensus-extra';
-        bar.appendChild(existingExtra);
-      }
-      existingExtra.innerHTML = extra;
-    }
-  } catch (e) {}
-}
+/* ════════════════════════════════════════
+   START
+   ════════════════════════════════════════ */
+pollAll();
+setInterval(pollAll, 3000);
 </script>
 </body>
 </html>
