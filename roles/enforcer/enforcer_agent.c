@@ -40,7 +40,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
-#include <signal.h>
+#include "compat.h"
 
 /* ── Tunables ────────────────────────────────────────────────────────── */
 
@@ -512,6 +512,8 @@ static void monitor_pass(time_t now)
 
 int main(int argc, char **argv)
 {
+    compat_winsock_init();
+
     g_agent_name = EDGE_AGENT_NAME;
     g_agent_port = EDGE_HTTP_PORT;
     const char *approve_target = NULL;
@@ -733,5 +735,6 @@ heartbeat:
         mqtt_transport_close(&g_mqtt);
     else
         udp_close(&g_udp);
+    compat_winsock_cleanup();
     return 0;
 }

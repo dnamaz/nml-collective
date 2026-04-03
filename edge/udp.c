@@ -1,40 +1,40 @@
 #include "udp.h"
+#include "compat.h"
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/select.h>
-#include <unistd.h>
 #include <string.h>
 #include <stdio.h>
 
 int udp_init(UDPContext *ctx, const char *mcast_group, uint16_t port)
 {
-    ctx->send_fd = -1;
-    ctx->recv_fd = -1;
+    ctx->send_fd = COMPAT_INVALID_SOCKET;
+    ctx->recv_fd = COMPAT_INVALID_SOCKET;
 
     /* ── Send socket ── */
     ctx->send_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (ctx->send_fd < 0) {
+    if (ctx->send_fd == COMPAT_INVALID_SOCKET) {
         perror("[udp] socket(send)");
         return -1;
     }
     int ttl = 2;
-    setsockopt(ctx->send_fd, IPPROTO_IP, IP_MULTICAST_TTL,  &ttl, sizeof(ttl));
+    setsockopt(ctx->send_fd, IPPROTO_IP, IP_MULTICAST_TTL,
+               COMPAT_SOCKOPT_CAST(&ttl), sizeof(ttl));
     int loop = 1;
-    setsockopt(ctx->send_fd, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof(loop));
+    setsockopt(ctx->send_fd, IPPROTO_IP, IP_MULTICAST_LOOP,
+               COMPAT_SOCKOPT_CAST(&loop), sizeof(loop));
 
     /* ── Receive socket ── */
     ctx->recv_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (ctx->recv_fd < 0) {
+    if (ctx->recv_fd == COMPAT_INVALID_SOCKET) {
         perror("[udp] socket(recv)");
-        close(ctx->send_fd); ctx->send_fd = -1;
+        compat_close_socket(ctx->send_fd); ctx->send_fd = COMPAT_INVALID_SOCKET;
         return -1;
     }
     int reuse = 1;
-    setsockopt(ctx->recv_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    setsockopt(ctx->recv_fd, SOL_SOCKET, SO_REUSEADDR,
+               COMPAT_SOCKOPT_CAST(&reuse), sizeof(reuse));
 #ifdef SO_REUSEPORT
-    setsockopt(ctx->recv_fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
+    setsockopt(ctx->recv_fd, SOL_SOCKET, SO_REUSEPORT,
+               COMPAT_SOCKOPT_CAST(&reuse), sizeof(reuse));
 #endif
 
     struct sockaddr_in bind_addr;
@@ -44,8 +44,8 @@ int udp_init(UDPContext *ctx, const char *mcast_group, uint16_t port)
     bind_addr.sin_addr.s_addr = INADDR_ANY;
     if (bind(ctx->recv_fd, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) < 0) {
         perror("[udp] bind");
-        close(ctx->send_fd); close(ctx->recv_fd);
-        ctx->send_fd = ctx->recv_fd = -1;
+        compat_close_socket(ctx->send_fd); compat_close_socket(ctx->recv_fd);
+        ctx->send_fd = ctx->recv_fd = COMPAT_INVALID_SOCKET;
         return -1;
     }
 
@@ -53,10 +53,10 @@ int udp_init(UDPContext *ctx, const char *mcast_group, uint16_t port)
     mreq.imr_multiaddr.s_addr = inet_addr(mcast_group);
     mreq.imr_interface.s_addr = INADDR_ANY;
     if (setsockopt(ctx->recv_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP,
-                   &mreq, sizeof(mreq)) < 0) {
+                   COMPAT_SOCKOPT_CAST(&mreq), sizeof(mreq)) < 0) {
         fprintf(stderr, "[udp] failed to join %s\n", mcast_group);
-        close(ctx->send_fd); close(ctx->recv_fd);
-        ctx->send_fd = ctx->recv_fd = -1;
+        compat_close_socket(ctx->send_fd); compat_close_socket(ctx->recv_fd);
+        ctx->send_fd = ctx->recv_fd = COMPAT_INVALID_SOCKET;
         return -1;
     }
 
@@ -65,8 +65,14 @@ int udp_init(UDPContext *ctx, const char *mcast_group, uint16_t port)
 
 void udp_close(UDPContext *ctx)
 {
-    if (ctx->send_fd >= 0) { close(ctx->send_fd); ctx->send_fd = -1; }
-    if (ctx->recv_fd >= 0) { close(ctx->recv_fd); ctx->recv_fd = -1; }
+    if (ctx->send_fd != COMPAT_INVALID_SOCKET) {
+        compat_close_socket(ctx->send_fd);
+        ctx->send_fd = COMPAT_INVALID_SOCKET;
+    }
+    if (ctx->recv_fd != COMPAT_INVALID_SOCKET) {
+        compat_close_socket(ctx->recv_fd);
+        ctx->recv_fd = COMPAT_INVALID_SOCKET;
+    }
 }
 
 int udp_send(UDPContext *ctx, const char *mcast_group, uint16_t port,
@@ -93,7 +99,7 @@ int udp_recv(UDPContext *ctx, uint8_t *buf, size_t buf_sz, int timeout_ms,
     tv.tv_usec = (timeout_ms % 1000) * 1000L;
 
     struct timeval *tvp = timeout_ms < 0 ? NULL : &tv;
-    int rc = select(ctx->recv_fd + 1, &fds, NULL, NULL, tvp);
+    int rc = select(COMPAT_SELECT_NFDS(ctx->recv_fd), &fds, NULL, NULL, tvp);
     if (rc <= 0) return rc;
 
     struct sockaddr_in src;

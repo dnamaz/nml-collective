@@ -30,18 +30,13 @@
 /* For direct mqtt_publish on custom topics (nml/committed/<phash>) */
 #include "../../edge/mqtt/mqtt.h"
 
+#include "compat.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <signal.h>
 #include <errno.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <sys/socket.h>
-#include <sys/select.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <stdint.h>
 
 /* Pull in nml_sign_program */
@@ -151,7 +146,7 @@ static int json_str(const char *json, const char *key,
     return 0;
 }
 
-static void http_respond(int fd, int status, const char *body)
+static void http_respond(compat_socket_t fd, int status, const char *body)
 {
     const char *status_str;
     switch (status) {
@@ -175,9 +170,9 @@ static void http_respond(int fd, int status, const char *body)
              "\r\n",
              status, status_str, body_len);
 
-    write(fd, header, strlen(header));
+    send(fd, header, strlen(header), 0);
     if (body && body_len > 0) {
-        write(fd, body, body_len);
+        send(fd, body, body_len, 0);
     }
 }
 
@@ -258,7 +253,7 @@ static void handle_result(const char *peer_name, const char *payload)
 
 /* ── HTTP request handlers ───────────────────────────────────────────── */
 
-static void handle_health(int fd)
+static void handle_health(compat_socket_t fd)
 {
     /* count pending quarantine entries */
     int pending = 0;
@@ -279,7 +274,7 @@ static void handle_health(int fd)
     http_respond(fd, 200, body);
 }
 
-static void handle_get_object(int fd, const char *hash)
+static void handle_get_object(compat_socket_t fd, const char *hash)
 {
     if (!hash || strlen(hash) != 16) {
         http_respond(fd, 400, "{\"error\":\"invalid hash\"}");
@@ -309,18 +304,18 @@ static void handle_get_object(int fd, const char *hash)
                         "Content-Type: application/octet-stream\r\n"
                         "Content-Length: %ld\r\n"
                         "Connection: close\r\n\r\n", file_sz);
-    write(fd, hdr, hlen);
+    send(fd, hdr, hlen, 0);
 
     /* Stream file content */
     uint8_t chunk[8192];
     size_t n;
     while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) {
-        write(fd, chunk, n);
+        send(fd, (const char *)chunk, n, 0);
     }
     fclose(f);
 }
 
-static void handle_data_get(int fd, const char *query)
+static void handle_data_get(compat_socket_t fd, const char *query)
 {
     if (!query) {
         http_respond(fd, 400, "{\"error\":\"missing query\"}");
@@ -360,7 +355,7 @@ static void handle_data_get(int fd, const char *query)
     http_respond(fd, 404, "{\"error\":\"not found\"}");
 }
 
-static void handle_data_submit(int fd, const char *body)
+static void handle_data_submit(compat_socket_t fd, const char *body)
 {
     char name[64]    = {0};
     char content[NML_MAX_PROGRAM_LEN + 1] = {0};
@@ -404,7 +399,7 @@ static void handle_data_submit(int fd, const char *body)
     http_respond(fd, 200, resp);
 }
 
-static void handle_data_approve(int fd, const char *body)
+static void handle_data_approve(compat_socket_t fd, const char *body)
 {
     char hash[17] = {0};
     if (json_str(body, "hash", hash, sizeof(hash)) < 0) {
@@ -453,7 +448,7 @@ static void handle_data_approve(int fd, const char *body)
     http_respond(fd, 200, resp);
 }
 
-static void handle_data_quarantine(int fd)
+static void handle_data_quarantine(compat_socket_t fd)
 {
     static char buf[16384];
     int pos = 0;
@@ -482,7 +477,7 @@ static void handle_data_quarantine(int fd)
     http_respond(fd, 200, buf);
 }
 
-static void handle_data_pool(int fd)
+static void handle_data_pool(compat_socket_t fd)
 {
     static char buf[8192];
     int pos = 0;
@@ -509,16 +504,16 @@ static void handle_data_pool(int fd)
 
 /* ── HTTP server ─────────────────────────────────────────────────────── */
 
-static int make_server_socket(uint16_t port)
+static compat_socket_t make_server_socket(uint16_t port)
 {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
+    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == COMPAT_INVALID_SOCKET) {
         fprintf(stderr, "[%s] socket: %s\n", g_agent_name, strerror(errno));
-        return -1;
+        return COMPAT_INVALID_SOCKET;
     }
 
     int opt = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, COMPAT_SOCKOPT_CAST(&opt), sizeof(opt));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -529,23 +524,23 @@ static int make_server_socket(uint16_t port)
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         fprintf(stderr, "[%s] bind port %d: %s\n",
                 g_agent_name, (int)port, strerror(errno));
-        close(fd);
-        return -1;
+        compat_close_socket(fd);
+        return COMPAT_INVALID_SOCKET;
     }
 
     if (listen(fd, 8) < 0) {
         fprintf(stderr, "[%s] listen: %s\n", g_agent_name, strerror(errno));
-        close(fd);
-        return -1;
+        compat_close_socket(fd);
+        return COMPAT_INVALID_SOCKET;
     }
 
     return fd;
 }
 
-static void http_serve_once(int server_fd)
+static void http_serve_once(compat_socket_t server_fd)
 {
-    int client_fd = accept(server_fd, NULL, NULL);
-    if (client_fd < 0) {
+    compat_socket_t client_fd = accept(server_fd, NULL, NULL);
+    if (client_fd == COMPAT_INVALID_SOCKET) {
         return;
     }
 
@@ -555,7 +550,7 @@ static void http_serve_once(int server_fd)
 
     /* read until \r\n\r\n found or buffer full */
     while (total < HTTP_BUF_SZ - 1) {
-        int n = (int)read(client_fd, buf + total, (size_t)(HTTP_BUF_SZ - 1 - total));
+        int n = (int)recv(client_fd, buf + total, (size_t)(HTTP_BUF_SZ - 1 - total), 0);
         if (n <= 0) {
             break;
         }
@@ -568,7 +563,7 @@ static void http_serve_once(int server_fd)
     }
 
     if (!found_headers) {
-        close(client_fd);
+        compat_close_socket(client_fd);
         return;
     }
 
@@ -598,8 +593,8 @@ static void http_serve_once(int server_fd)
 
         int body_have = (int)(buf + total - body_ptr);
         while (body_have < content_length && total < HTTP_BUF_SZ - 1) {
-            int n = (int)read(client_fd, buf + total,
-                              (size_t)(HTTP_BUF_SZ - 1 - total));
+            int n = (int)recv(client_fd, buf + total,
+                              (size_t)(HTTP_BUF_SZ - 1 - total), 0);
             if (n <= 0) {
                 break;
             }
@@ -668,7 +663,7 @@ static void http_serve_once(int server_fd)
         http_respond(client_fd, 404, "{\"error\":\"not found\"}");
     }
 
-    close(client_fd);
+    compat_close_socket(client_fd);
 }
 
 /* ── Herald credential issuance ──────────────────────────────────────── */
@@ -681,8 +676,8 @@ static void issue_credential(const char *agent_name, const char *password,
              "{\"agent\":\"%s\",\"password\":\"%s\",\"role\":\"%s\"}",
              agent_name, password, role);
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return;
+    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == COMPAT_INVALID_SOCKET) return;
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -691,7 +686,7 @@ static void issue_credential(const char *agent_name, const char *password,
     addr.sin_addr.s_addr = inet_addr(g_herald_host);
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(fd);
+        compat_close_socket(fd);
         return;
     }
 
@@ -702,12 +697,12 @@ static void issue_credential(const char *agent_name, const char *password,
                         "Content-Length: %zu\r\n"
                         "\r\n%s",
                         strlen(body), body);
-    write(fd, req, rlen);
+    send(fd, req, rlen, 0);
 
     /* Read and discard response */
     char resp[512];
-    read(fd, resp, sizeof(resp) - 1);
-    close(fd);
+    recv(fd, resp, sizeof(resp) - 1, 0);
+    compat_close_socket(fd);
 
     printf("[%s] issued credential to Herald for '%s' (role=%s)\n",
            g_agent_name, agent_name, role);
@@ -747,6 +742,8 @@ static void load_key(const char *key_arg)
 
 int main(int argc, char *argv[])
 {
+    compat_winsock_init();
+
     /* Parse args */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) {
@@ -790,14 +787,14 @@ int main(int argc, char *argv[])
     vote_table_init(&g_votes);
 
     /* 3. Ensure data directory structure exists */
-    if (mkdir(g_data_dir, 0755) < 0 && errno != EEXIST) {
+    if (compat_mkdir(g_data_dir, 0755) < 0 && errno != EEXIST) {
         fprintf(stderr, "[%s] warning: mkdir %s: %s\n",
                 g_agent_name, g_data_dir, strerror(errno));
     }
     {
         char objs_dir[320];
         snprintf(objs_dir, sizeof(objs_dir), "%s/objects", g_data_dir);
-        if (mkdir(objs_dir, 0755) < 0 && errno != EEXIST) {
+        if (compat_mkdir(objs_dir, 0755) < 0 && errno != EEXIST) {
             fprintf(stderr, "[%s] warning: mkdir %s: %s\n",
                     g_agent_name, objs_dir, strerror(errno));
         }
@@ -806,7 +803,9 @@ int main(int argc, char *argv[])
     /* 4. Signal handlers */
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
+#ifdef SIGPIPE
     signal(SIGPIPE, SIG_IGN);
+#endif
 
     /* 5. Connect to MQTT broker */
     if (mqtt_transport_init(&g_mqtt, g_broker_host, g_broker_port,
@@ -817,8 +816,8 @@ int main(int argc, char *argv[])
     }
 
     /* 6. Bind HTTP server socket */
-    int server_fd = make_server_socket(g_http_port);
-    if (server_fd < 0) {
+    compat_socket_t server_fd = make_server_socket(g_http_port);
+    if (server_fd == COMPAT_INVALID_SOCKET) {
         fprintf(stderr, "[%s] HTTP server init failed\n", g_agent_name);
         mqtt_transport_close(&g_mqtt);
         return 1;
@@ -853,7 +852,7 @@ int main(int argc, char *argv[])
         FD_ZERO(&rfds);
         FD_SET(server_fd, &rfds);
         struct timeval tv = {1, 0};
-        int sel = select(server_fd + 1, &rfds, NULL, NULL, &tv);
+        int sel = select(COMPAT_SELECT_NFDS(server_fd), &rfds, NULL, NULL, &tv);
         if (sel > 0 && FD_ISSET(server_fd, &rfds))
             http_serve_once(server_fd);
 
@@ -958,7 +957,8 @@ int main(int argc, char *argv[])
     }
 
     printf("[%s] shutting down\n", g_agent_name);
-    close(server_fd);
+    compat_close_socket(server_fd);
     mqtt_transport_close(&g_mqtt);
+    compat_winsock_cleanup();
     return 0;
 }

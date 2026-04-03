@@ -9,6 +9,7 @@
 
 #include "identity.h"
 #include "config.h"
+#include "compat.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +28,18 @@ int identity_get_hw_uid(uint8_t *buf, size_t *len, size_t buf_capacity)
     /* ARM: delegate to BSP hook (weak symbol below) */
     *len = buf_capacity;
     return arm_edge_hardware_uid(buf, len);
+
+#elif defined(COMPAT_WINDOWS)
+    /* Windows / MinGW: use ComputerName as stable machine identifier */
+    char name[256] = {0};
+    DWORD sz = sizeof(name);
+    if (GetComputerNameA(name, &sz) && sz > 0) {
+        if ((size_t)sz > buf_capacity - 1) sz = (DWORD)(buf_capacity - 1);
+        memcpy(buf, name, sz);
+        *len = (size_t)sz;
+        return 0;
+    }
+    return -1;
 
 #elif defined(__linux__)
     /* Linux: read /etc/machine-id (32-char hex UUID, newline-terminated) */

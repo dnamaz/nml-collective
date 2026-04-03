@@ -5,13 +5,8 @@
  */
 
 #include "mqtt_transport.h"
+#include "compat.h"
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/select.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
@@ -44,10 +39,10 @@ static void on_publish(void **state, struct mqtt_response_publish *published)
 
 /* ── TCP socket helpers ──────────────────────────────────────────────── */
 
-static int tcp_connect(const char *host, uint16_t port)
+static compat_socket_t tcp_connect(const char *host, uint16_t port)
 {
-    int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (fd < 0) return -1;
+    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd == COMPAT_INVALID_SOCKET) return COMPAT_INVALID_SOCKET;
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -56,14 +51,12 @@ static int tcp_connect(const char *host, uint16_t port)
     addr.sin_addr.s_addr = inet_addr(host);
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(fd);
-        return -1;
+        compat_close_socket(fd);
+        return COMPAT_INVALID_SOCKET;
     }
 
     /* Set non-blocking — MQTT-C expects this */
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags >= 0)
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    compat_set_nonblocking(fd);
 
     return fd;
 }
@@ -118,7 +111,7 @@ int mqtt_transport_init(MQTTTransport *t,
 
     /* Connect TCP to broker */
     t->sockfd = tcp_connect(broker_host, broker_port);
-    if (t->sockfd < 0) {
+    if (t->sockfd == COMPAT_INVALID_SOCKET) {
         fprintf(stderr, "[mqtt] failed to connect to %s:%u\n",
                 broker_host, broker_port);
         return -1;
@@ -131,7 +124,7 @@ int mqtt_transport_init(MQTTTransport *t,
                                     on_publish);
     if (err != MQTT_OK) {
         fprintf(stderr, "[mqtt] mqtt_init failed: %s\n", mqtt_error_str(err));
-        close(t->sockfd);
+        compat_close_socket(t->sockfd);
         return -1;
     }
 
@@ -155,14 +148,34 @@ int mqtt_transport_init(MQTTTransport *t,
                        60);             /* keep_alive seconds */
     if (err != MQTT_OK) {
         fprintf(stderr, "[mqtt] mqtt_connect failed: %s\n", mqtt_error_str(err));
-        close(t->sockfd);
+        compat_close_socket(t->sockfd);
         return -1;
     }
 
-    /* Sync to send the CONNECT packet */
-    if (mqtt_sync(&t->client) != MQTT_OK) {
+    /* Sync to send the CONNECT packet.
+       On Windows, the first sync may fail if the broker is still
+       initialising — retry a few times with a short delay. */
+    int sync_ok = 0;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (mqtt_sync(&t->client) == MQTT_OK) {
+            sync_ok = 1;
+            break;
+        }
+        /* Re-init and retry */
+        compat_close_socket(t->sockfd);
+        t->sockfd = tcp_connect(broker_host, broker_port);
+        if (t->sockfd == COMPAT_INVALID_SOCKET) break;
+        mqtt_init(&t->client, t->sockfd,
+                  t->sendbuf, sizeof(t->sendbuf),
+                  t->recvbuf, sizeof(t->recvbuf),
+                  on_publish);
+        t->client.publish_response_callback_state = t;
+        mqtt_connect(&t->client, agent_name, will_topic,
+                     "", 0, NULL, NULL, MQTT_CONNECT_WILL_RETAIN, 60);
+    }
+    if (!sync_ok) {
         fprintf(stderr, "[mqtt] initial sync failed\n");
-        close(t->sockfd);
+        compat_close_socket(t->sockfd);
         return -1;
     }
 
@@ -189,11 +202,11 @@ int mqtt_transport_init(MQTTTransport *t,
 
 void mqtt_transport_close(MQTTTransport *t)
 {
-    if (t->sockfd >= 0) {
+    if (t->sockfd != COMPAT_INVALID_SOCKET) {
         mqtt_disconnect(&t->client);
         mqtt_sync(&t->client);
-        close(t->sockfd);
-        t->sockfd = -1;
+        compat_close_socket(t->sockfd);
+        t->sockfd = COMPAT_INVALID_SOCKET;
     }
 }
 
@@ -232,7 +245,7 @@ int mqtt_transport_sync(MQTTTransport *t, int timeout_ms)
     tv.tv_usec = (timeout_ms % 1000) * 1000L;
 
     struct timeval *tvp = timeout_ms < 0 ? NULL : &tv;
-    select(t->sockfd + 1, &fds, NULL, NULL, tvp);
+    select(COMPAT_SELECT_NFDS(t->sockfd), &fds, NULL, NULL, tvp);
 
     /* Process all pending I/O — sends outbound, receives inbound,
        fires on_publish callback for each incoming PUBLISH. */

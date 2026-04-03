@@ -23,6 +23,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "compat.h"
 #include "mqtt/mqtt.h"
 #include "msg.h"
 
@@ -41,7 +42,7 @@ typedef struct {
 
 typedef struct {
     struct mqtt_client client;
-    int                sockfd;
+    compat_socket_t    sockfd;
     uint8_t            sendbuf[MQTT_IO_BUF_SZ];
     uint8_t            recvbuf[MQTT_IO_BUF_SZ];
     char               agent_name[64];

@@ -68,13 +68,26 @@ extern "C" {
  */
 
 
-/* UNIX-like platform support */
-#if defined(__unix__) || defined(__APPLE__) || defined(__NuttX__)
+/* UNIX-like platform support (includes MinGW/MSYS2 which uses winsock2) */
+#if defined(__unix__) || defined(__APPLE__) || defined(__NuttX__) || defined(__MINGW32__)
+
     #include <limits.h>
     #include <string.h>
     #include <stdarg.h>
+    #include <stdint.h>
     #include <time.h>
-    #include <arpa/inet.h>
+
+    #if defined(__MINGW32__)
+        /* MinGW: use Winsock2 for networking, winpthreads for mutexes */
+        #ifndef WIN32_LEAN_AND_MEAN
+          #define WIN32_LEAN_AND_MEAN
+        #endif
+        #include <winsock2.h>
+        #include <ws2tcpip.h>
+    #else
+        #include <arpa/inet.h>
+    #endif
+
     #include <pthread.h>
 
     #define MQTT_PAL_HTONS(s) htons(s)
@@ -114,6 +127,8 @@ extern "C" {
             } bearssl_context;
 
             typedef bearssl_context* mqtt_pal_socket_handle;
+        #elif defined(__MINGW32__)
+            typedef SOCKET mqtt_pal_socket_handle;
         #else
             typedef int mqtt_pal_socket_handle;
         #endif

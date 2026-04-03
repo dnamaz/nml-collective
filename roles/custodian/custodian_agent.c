@@ -31,18 +31,13 @@
 /* Direct MQTT publish for plain JSON topics */
 #include "../../edge/mqtt/mqtt.h"
 
+#include "compat.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <signal.h>
 #include <errno.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <sys/socket.h>
-#include <sys/select.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <stdint.h>
 
 /* ── Constants ───────────────────────────────────────────────────────── */
@@ -195,13 +190,13 @@ static int http_post(const char *host, uint16_t port,
     addr.sin_port        = htons(port);
     addr.sin_addr.s_addr = inet_addr(host);
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == COMPAT_INVALID_SOCKET) return -1;
     struct timeval tv = {5, 0};
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, COMPAT_SOCKOPT_CAST(&tv), sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, COMPAT_SOCKOPT_CAST(&tv), sizeof(tv));
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(fd); return -1;
+        compat_close_socket(fd); return -1;
     }
 
     char req[4096];
@@ -212,11 +207,11 @@ static int http_post(const char *host, uint16_t port,
         "Content-Length: %zu\r\n"
         "Connection: close\r\n\r\n%s",
         path, host, port, strlen(body), body);
-    write(fd, req, (size_t)req_len);
+    send(fd, req, (size_t)req_len, 0);
 
     char raw[HTTP_BUF_SZ];
-    ssize_t rn = read(fd, raw, sizeof(raw) - 1);
-    close(fd);
+    int rn = recv(fd, raw, sizeof(raw) - 1, 0);
+    compat_close_socket(fd);
     if (rn <= 0) return -1;
     raw[rn] = '\0';
     char *hdr_end = strstr(raw, "\r\n\r\n");
@@ -233,10 +228,10 @@ static int http_post(const char *host, uint16_t port,
 
 static void ensure_data_dir(void)
 {
-    mkdir(g_data_dir, 0755);
+    compat_mkdir(g_data_dir, 0755);
     char obj_dir[280];
     snprintf(obj_dir, sizeof(obj_dir), "%s/objects", g_data_dir);
-    mkdir(obj_dir, 0755);
+    compat_mkdir(obj_dir, 0755);
 }
 
 /* ── DataItem helpers ────────────────────────────────────────────────── */
@@ -326,14 +321,14 @@ static void check_staleness(void)
 
 /* ── HTTP server ─────────────────────────────────────────────────────── */
 
-static int g_http_fd = -1;
+static compat_socket_t g_http_fd = COMPAT_INVALID_SOCKET;
 
-static int http_listen(uint16_t port)
+static compat_socket_t http_listen(uint16_t port)
 {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == COMPAT_INVALID_SOCKET) return COMPAT_INVALID_SOCKET;
     int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, COMPAT_SOCKOPT_CAST(&one), sizeof(one));
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family      = AF_INET;
@@ -341,12 +336,12 @@ static int http_listen(uint16_t port)
     addr.sin_port        = htons(port);
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
         listen(fd, 8) < 0) {
-        close(fd); return -1;
+        compat_close_socket(fd); return COMPAT_INVALID_SOCKET;
     }
     return fd;
 }
 
-static void http_send(int fd, int code, const char *body)
+static void http_send(compat_socket_t fd, int code, const char *body)
 {
     char hdr[256];
     int hdr_len = snprintf(hdr, sizeof(hdr),
@@ -358,11 +353,11 @@ static void http_send(int fd, int code, const char *body)
         "Connection: close\r\n\r\n",
         code, code == 200 ? "OK" : code == 201 ? "Created" : "Error",
         strlen(body));
-    write(fd, hdr, (size_t)hdr_len);
-    write(fd, body, strlen(body));
+    send(fd, hdr, (size_t)hdr_len, 0);
+    send(fd, body, strlen(body), 0);
 }
 
-static void http_send_binary(int fd, const char *content_type,
+static void http_send_binary(compat_socket_t fd, const char *content_type,
                               const char *data, size_t len)
 {
     char hdr[256];
@@ -373,20 +368,20 @@ static void http_send_binary(int fd, const char *content_type,
         "Access-Control-Allow-Origin: *\r\n"
         "Connection: close\r\n\r\n",
         content_type, len);
-    write(fd, hdr, (size_t)hdr_len);
-    write(fd, data, len);
+    send(fd, hdr, (size_t)hdr_len, 0);
+    send(fd, data, len, 0);
 }
 
-static void handle_http(int cfd)
+static void handle_http(compat_socket_t cfd)
 {
     char req[HTTP_BUF_SZ];
-    ssize_t n = read(cfd, req, sizeof(req) - 1);
-    if (n <= 0) { close(cfd); return; }
+    int n = recv(cfd, req, sizeof(req) - 1, 0);
+    if (n <= 0) { compat_close_socket(cfd); return; }
     req[n] = '\0';
 
     char method[8], path[256];
     if (sscanf(req, "%7s %255s", method, path) != 2) {
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* GET /health */
@@ -400,7 +395,7 @@ static void handle_http(int cfd)
              "\"items\":%d,\"approved\":%d}",
             g_agent_name, g_item_count, approved);
         http_send(cfd, 200, body);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* GET /pool — list all data items */
@@ -421,7 +416,7 @@ static void handle_http(int cfd)
         }
         snprintf(body + pos, sizeof(body) - (size_t)pos, "]");
         http_send(cfd, 200, body);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* GET /objects/<hash> — serve stored NebulaDisk object to Workers */
@@ -438,21 +433,21 @@ static void handle_http(int cfd)
 
         if (!storage_exists(g_data_dir, clean_hash)) {
             http_send(cfd, 404, "{\"error\":\"not found\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
 
         char obj_path[512];
         if (storage_path(g_data_dir, clean_hash,
                          obj_path, sizeof(obj_path)) < 0) {
             http_send(cfd, 500, "{\"error\":\"storage error\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
 
         /* Stream the raw .obj file */
         FILE *f = fopen(obj_path, "rb");
         if (!f) {
             http_send(cfd, 500, "{\"error\":\"read error\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
         fseek(f, 0, SEEK_END);
         long fsz = ftell(f);
@@ -461,7 +456,7 @@ static void handle_http(int cfd)
         if (!file_buf) {
             fclose(f);
             http_send(cfd, 500, "{\"error\":\"oom\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
         size_t rd = fread(file_buf, 1, (size_t)fsz, f);
         fclose(f);
@@ -472,7 +467,7 @@ static void handle_http(int cfd)
 
         http_send_binary(cfd, "application/octet-stream", file_buf, rd);
         free(file_buf);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /*
@@ -489,7 +484,7 @@ static void handle_http(int cfd)
         char *body_start = strstr(req, "\r\n\r\n");
         if (!body_start) {
             http_send(cfd, 400, "{\"error\":\"no body\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
         body_start += 4;
 
@@ -502,7 +497,7 @@ static void handle_http(int cfd)
         const char *data_start = strstr(body_start, "\"data\":");
         if (!data_start) {
             http_send(cfd, 400, "{\"error\":\"data field required\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
         data_start += 7;
         while (*data_start == ' ') data_start++;
@@ -520,7 +515,7 @@ static void handle_http(int cfd)
 
         if (n_floats <= 0) {
             http_send(cfd, 400, "{\"error\":\"no numeric data found\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
 
         /* Store as NebulaDisk object */
@@ -529,7 +524,7 @@ static void handle_http(int cfd)
                         (size_t)n_floats * sizeof(float),
                         STORAGE_OBJ_DATA, g_agent_name, name, hash) < 0) {
             http_send(cfd, 500, "{\"error\":\"storage failed\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
 
         /* Track in DataItem list */
@@ -557,7 +552,7 @@ static void handle_http(int cfd)
 
         printf("[custodian] ingested '%s'  samples=%d  hash=%s\n",
                name, n_floats, hash);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /*
@@ -566,16 +561,16 @@ static void handle_http(int cfd)
      */
     if (strcmp(method, "POST") == 0 && strcmp(path, "/approve") == 0) {
         char *body_start = strstr(req, "\r\n\r\n");
-        if (!body_start) { http_send(cfd, 400, "{\"error\":\"no body\"}"); close(cfd); return; }
+        if (!body_start) { http_send(cfd, 400, "{\"error\":\"no body\"}"); compat_close_socket(cfd); return; }
         body_start += 4;
         char hash[17] = {0};
         json_str(body_start, "hash", hash, sizeof(hash));
         if (hash[0] == '\0') {
-            http_send(cfd, 400, "{\"error\":\"hash required\"}"); close(cfd); return;
+            http_send(cfd, 400, "{\"error\":\"hash required\"}"); compat_close_socket(cfd); return;
         }
         on_approved(hash);
         http_send(cfd, 200, "{\"ok\":true}");
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* GET /peers */
@@ -583,16 +578,16 @@ static void handle_http(int cfd)
         char body[HTTP_BUF_SZ / 4];
         peer_list_json(&g_peers, body, sizeof(body));
         http_send(cfd, 200, body);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     if (strcmp(method, "OPTIONS") == 0) {
         http_send(cfd, 200, "{}");
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     http_send(cfd, 404, "{\"error\":\"not found\"}");
-    close(cfd);
+    compat_close_socket(cfd);
 }
 
 /* ── CLI usage ───────────────────────────────────────────────────────── */
@@ -634,6 +629,8 @@ int main(int argc, char *argv[])
         }
     }
 
+    compat_winsock_init();
+
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
 
@@ -662,7 +659,7 @@ int main(int argc, char *argv[])
 
     /* ── HTTP server ── */
     g_http_fd = http_listen(g_http_port);
-    if (g_http_fd < 0) {
+    if (g_http_fd == COMPAT_INVALID_SOCKET) {
         fprintf(stderr, "[custodian] failed to bind HTTP on port %u\n",
                 g_http_port);
         mqtt_transport_close(&g_mqtt);
@@ -686,10 +683,10 @@ int main(int argc, char *argv[])
         FD_ZERO(&rfds);
         FD_SET(g_http_fd, &rfds);
         struct timeval tv = {1, 0};
-        if (select(g_http_fd + 1, &rfds, NULL, NULL, &tv) > 0 &&
+        if (select(COMPAT_SELECT_NFDS(g_http_fd), &rfds, NULL, NULL, &tv) > 0 &&
             FD_ISSET(g_http_fd, &rfds)) {
-            int cfd = accept(g_http_fd, NULL, NULL);
-            if (cfd >= 0) handle_http(cfd);
+            compat_socket_t cfd = accept(g_http_fd, NULL, NULL);
+            if (cfd != COMPAT_INVALID_SOCKET) handle_http(cfd);
         }
 
         /* Sync MQTT I/O */
@@ -738,6 +735,7 @@ int main(int argc, char *argv[])
 
     printf("[custodian] shutting down\n");
     mqtt_transport_close(&g_mqtt);
-    if (g_http_fd >= 0) close(g_http_fd);
+    if (g_http_fd != COMPAT_INVALID_SOCKET) compat_close_socket(g_http_fd);
+    compat_winsock_cleanup();
     return 0;
 }

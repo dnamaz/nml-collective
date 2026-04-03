@@ -20,11 +20,12 @@
 #include "report.h"
 #include "identity.h"
 
+#include "compat.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <signal.h>
 
 /* ── Globals ─────────────────────────────────────────────────────────── */
 
@@ -141,6 +142,12 @@ int main(int argc, char **argv)
         }
     }
 
+    /* Initialise platform networking (Winsock on Windows, no-op on POSIX) */
+    if (compat_winsock_init() != 0) {
+        fprintf(stderr, "[%s] failed to initialise networking\n", agent_name);
+        return 1;
+    }
+
     /* Load optional data file */
     char *local_data = NULL;
     if (data_path) {
@@ -243,6 +250,7 @@ int main(int argc, char **argv)
 
     printf("\n[%s] shutting down\n", agent_name);
     udp_close(&udp);
+    compat_winsock_cleanup();
     free(local_data);
     return 0;
 }

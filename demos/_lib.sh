@@ -16,6 +16,12 @@
 _LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _REPO_ROOT="$(cd "$_LIB_DIR/.." && pwd)"
 
+# Platform binary extension (.exe on Windows/MSYS/MinGW, empty on POSIX)
+_EXT=""
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*) _EXT=".exe" ;;
+esac
+
 PIDS=()
 BROKER_HOST="${BROKER_HOST:-127.0.0.1}"
 BROKER_PORT="${BROKER_PORT:-1883}"
@@ -33,23 +39,24 @@ nml_cleanup() {
 nml_start_herald() {
     local broker_port="${BROKER_PORT}"
     local http_port="9000"
+    local passthrough=()
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --broker-port) broker_port="$2"; shift 2 ;;
             --http-port)   http_port="$2";   shift 2 ;;
-            *) shift ;;
+            *)             passthrough+=("$1"); shift ;;
         esac
     done
 
-    local bin="$_REPO_ROOT/roles/herald/herald_agent"
+    local bin="$_REPO_ROOT/roles/herald/herald_agent${_EXT}"
     if [[ ! -f "$bin" ]]; then
         echo "[BUILD] Building herald..."
         make -C "$_REPO_ROOT/roles/herald" 2>&1 | tail -3
     fi
 
     echo "[herald] Starting MQTT broker on :${broker_port}"
-    "$bin" --broker-port "$broker_port" --http-port "$http_port" &
+    "$bin" --broker-port "$broker_port" --api-port "$http_port" "${passthrough[@]}" &
     PIDS+=($!)
     BROKER_PORT="$broker_port"
 }
@@ -72,7 +79,7 @@ nml_start() {
         esac
     done
 
-    local bin="$_REPO_ROOT/roles/$role/${role}_agent"
+    local bin="$_REPO_ROOT/roles/$role/${role}_agent${_EXT}"
     if [[ ! -f "$bin" ]]; then
         echo "[BUILD] Building $role..."
         make -C "$_REPO_ROOT/roles/$role" 2>&1 | tail -3

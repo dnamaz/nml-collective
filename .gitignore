@@ -21,3 +21,11 @@ roles/*/herald_agent
 roles/*/oracle_agent
 roles/*/sentient_agent
 roles/*/worker_agent
+roles/*/architect_agent.exe
+roles/*/custodian_agent.exe
+roles/*/emissary_agent.exe
+roles/*/enforcer_agent.exe
+roles/*/herald_agent.exe
+roles/*/oracle_agent.exe
+roles/*/sentient_agent.exe
+roles/*/worker_agent.exe

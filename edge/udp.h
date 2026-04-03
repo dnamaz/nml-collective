@@ -11,10 +11,11 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "compat.h"
 
 typedef struct {
-    int send_fd;
-    int recv_fd;
+    compat_socket_t send_fd;
+    compat_socket_t recv_fd;
 } UDPContext;
 
 /* Initialise both sockets and join the multicast group.

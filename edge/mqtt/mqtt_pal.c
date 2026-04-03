@@ -329,9 +329,16 @@ ssize_t mqtt_pal_recvall(mqtt_pal_socket_handle fd, void* buf, size_t bufsz, int
     return (ssize_t)(bufptr - start);
 }
 
-#elif defined(__unix__) || defined(__APPLE__) || defined(__NuttX__)
+#elif defined(__unix__) || defined(__APPLE__) || defined(__NuttX__) || defined(__MINGW32__)
 
 #include <errno.h>
+
+/* MinGW uses Winsock — error codes come from WSAGetLastError(), not errno */
+#if defined(__MINGW32__)
+  #define MQTT_PAL_WOULD_BLOCK (WSAGetLastError() == WSAEWOULDBLOCK)
+#else
+  #define MQTT_PAL_WOULD_BLOCK (errno == EAGAIN || errno == EWOULDBLOCK)
+#endif
 
 ssize_t mqtt_pal_sendall(mqtt_pal_socket_handle fd, const void* buf, size_t len, int flags) {
     enum MQTTErrors error = 0;
@@ -339,7 +346,7 @@ ssize_t mqtt_pal_sendall(mqtt_pal_socket_handle fd, const void* buf, size_t len,
     while(sent < len) {
         ssize_t rv = send(fd, (const char*)buf + sent, len - sent, flags);
         if (rv < 0) {
-            if (errno == EAGAIN) {
+            if (MQTT_PAL_WOULD_BLOCK) {
                 /* should call send later again */
                 break;
             }
@@ -375,7 +382,7 @@ ssize_t mqtt_pal_recvall(mqtt_pal_socket_handle fd, void* buf, size_t bufsz, int
             break;
         }
         if (rv < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (MQTT_PAL_WOULD_BLOCK) {
                 /* should call recv later again */
                 break;
             }

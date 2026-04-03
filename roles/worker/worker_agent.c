@@ -32,7 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <signal.h>
+#include "compat.h"
 
 /* ── Globals ─────────────────────────────────────────────────────────── */
 
@@ -347,6 +347,8 @@ static void dispatch(int type, const char *peer_name, const char *sender_ip,
 
 int main(int argc, char **argv)
 {
+    compat_winsock_init();
+
     const char *data_path    = NULL;
     const char *data_name    = NULL;
     int         require_signed = 0;
@@ -497,5 +499,6 @@ int main(int argc, char **argv)
         udp_close(&g_udp);
     free(local_data);
     free(fetch_buf);
+    compat_winsock_cleanup();
     return 0;
 }

@@ -3,19 +3,16 @@
  */
 
 #include "http_client.h"
+#include "compat.h"
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
 #include <string.h>
 #include <stdio.h>
 
 int http_get(const char *host, uint16_t port, const char *path,
              char *out, size_t out_sz)
 {
-    int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (fd < 0) return -1;
+    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd == COMPAT_INVALID_SOCKET) return -1;
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -24,7 +21,7 @@ int http_get(const char *host, uint16_t port, const char *path,
     addr.sin_addr.s_addr = inet_addr(host);
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(fd);
+        compat_close_socket(fd);
         return -1;
     }
 
@@ -35,11 +32,11 @@ int http_get(const char *host, uint16_t port, const char *path,
         "GET %s HTTP/1.0\r\nHost: %s:%u\r\nConnection: close\r\n\r\n",
         path, host, (unsigned)port);
     if (req_len <= 0 || (size_t)req_len >= sizeof(req)) {
-        close(fd);
+        compat_close_socket(fd);
         return -1;
     }
     if (send(fd, req, (size_t)req_len, 0) != req_len) {
-        close(fd);
+        compat_close_socket(fd);
         return -1;
     }
 
@@ -52,7 +49,7 @@ int http_get(const char *host, uint16_t port, const char *path,
         if (n <= 0) break;
         total += n;
     }
-    close(fd);
+    compat_close_socket(fd);
 
     if (total <= 0) return -1;
     out[total] = '\0';

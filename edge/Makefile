@@ -20,8 +20,10 @@
 # With gcc-arm-embedded (full newlib):
 #   make arm ARM_CC=arm-none-eabi-gcc ARM_NEWLIB=1
 
+include ../platform.mk
+
 CC      ?= gcc
-TARGET  := edge_worker
+TARGET  := edge_worker$(PLATFORM_EXT)
 NML_SRC := ../../nml/runtime
 
 # Conservative tensor size: large enough for fraud detection (5×6=30 elements)
@@ -77,7 +79,7 @@ COLLECTIVE_ALL_OBJS := $(COLLECTIVE_OBJS) $(MQTT_OBJS) $(NML_EXEC_OBJ) $(TWEETNA
 all: libcollective.a
 
 edge_worker: $(ALL_OBJS)
-	$(CC) -o $@ $^ -lm
+	$(CC) -o $@ $^ -lm $(PLATFORM_LIBS)
 
 # ── libcollective.a ────────────────────────────────────────────────────────
 

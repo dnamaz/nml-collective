@@ -10,13 +10,13 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "storage.h"
+#include "compat.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <errno.h>
-#include <sys/stat.h>
 #include <stdint.h>
 
 /* Pull in sha256 and hex_encode as static functions. */
@@ -69,14 +69,14 @@ int storage_put(const char *dir, const char *content, size_t len,
     {
         char objs_dir[512];
         snprintf(objs_dir, sizeof(objs_dir), "%s/objects", dir);
-        if (mkdir(objs_dir, 0755) < 0 && errno != EEXIST) {
+        if (compat_mkdir(objs_dir, 0755) < 0 && errno != EEXIST) {
             fprintf(stderr, "[storage] mkdir %s: %s\n", objs_dir, strerror(errno));
             return -1;
         }
 
         char sub_dir[512];
         snprintf(sub_dir, sizeof(sub_dir), "%s/objects/%.2s", dir, hash_out);
-        if (mkdir(sub_dir, 0755) < 0 && errno != EEXIST) {
+        if (compat_mkdir(sub_dir, 0755) < 0 && errno != EEXIST) {
             fprintf(stderr, "[storage] mkdir %s: %s\n", sub_dir, strerror(errno));
             return -1;
         }

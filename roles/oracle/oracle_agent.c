@@ -27,17 +27,13 @@
 /* Direct MQTT publish for custom topics (nml/assess/<phash>, nml/spec) */
 #include "../../edge/mqtt/mqtt.h"
 
+#include "compat.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <signal.h>
 #include <math.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <sys/select.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <stdint.h>
 
 /* ── Constants ───────────────────────────────────────────────────────── */
@@ -362,10 +358,10 @@ static int llm_complete(const char *prompt, char *out_buf, size_t out_sz)
     addr.sin_port        = htons(g_llm_port);
     addr.sin_addr.s_addr = inet_addr(g_llm_host);
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == COMPAT_INVALID_SOCKET) return -1;
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(fd); return -1;
+        compat_close_socket(fd); return -1;
     }
 
     char http_req[4096];
@@ -376,11 +372,11 @@ static int llm_complete(const char *prompt, char *out_buf, size_t out_sz)
         "Content-Length: %d\r\n"
         "Connection: close\r\n\r\n%s",
         g_llm_path, g_llm_host, g_llm_port, body_len, req_body);
-    write(fd, http_req, (size_t)req_len);
+    send(fd, http_req, (size_t)req_len, 0);
 
     char resp[8192];
-    ssize_t rn = read(fd, resp, sizeof(resp) - 1);
-    close(fd);
+    int rn = recv(fd, resp, sizeof(resp) - 1, 0);
+    compat_close_socket(fd);
     if (rn <= 0) return -1;
     resp[rn] = '\0';
 
@@ -465,14 +461,14 @@ static void maybe_publish_spec(void)
 
 /* ── HTTP server ─────────────────────────────────────────────────────── */
 
-static int g_http_fd = -1;
+static compat_socket_t g_http_fd = COMPAT_INVALID_SOCKET;
 
-static int http_listen(uint16_t port)
+static compat_socket_t http_listen(uint16_t port)
 {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == COMPAT_INVALID_SOCKET) return COMPAT_INVALID_SOCKET;
     int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, COMPAT_SOCKOPT_CAST(&one), sizeof(one));
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family      = AF_INET;
@@ -480,12 +476,12 @@ static int http_listen(uint16_t port)
     addr.sin_port        = htons(port);
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
         listen(fd, 8) < 0) {
-        close(fd); return -1;
+        compat_close_socket(fd); return COMPAT_INVALID_SOCKET;
     }
     return fd;
 }
 
-static void http_send(int fd, int code, const char *body)
+static void http_send(compat_socket_t fd, int code, const char *body)
 {
     char hdr[256];
     int hdr_len = snprintf(hdr, sizeof(hdr),
@@ -496,20 +492,20 @@ static void http_send(int fd, int code, const char *body)
         "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
         "Connection: close\r\n\r\n",
         code, code == 200 ? "OK" : "Error", strlen(body));
-    write(fd, hdr, (size_t)hdr_len);
-    write(fd, body, strlen(body));
+    send(fd, hdr, (size_t)hdr_len, 0);
+    send(fd, body, strlen(body), 0);
 }
 
-static void handle_http(int cfd)
+static void handle_http(compat_socket_t cfd)
 {
     char req[1024];
-    ssize_t n = read(cfd, req, sizeof(req) - 1);
-    if (n <= 0) { close(cfd); return; }
+    int n = recv(cfd, req, sizeof(req) - 1, 0);
+    if (n <= 0) { compat_close_socket(cfd); return; }
     req[n] = '\0';
 
     char method[8], path[256];
     if (sscanf(req, "%7s %255s", method, path) != 2) {
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* GET /health */
@@ -520,7 +516,7 @@ static void handle_http(int cfd)
              "\"peers\":%d,\"sessions\":%d,\"agents\":%d}",
             g_agent_name, g_peers.count, g_oracle.count, g_stats.count);
         http_send(cfd, 200, body);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* GET /assessments — list all assessed sessions */
@@ -538,7 +534,7 @@ static void handle_http(int cfd)
         }
         snprintf(body + pos, sizeof(body) - (size_t)pos, "]");
         http_send(cfd, 200, body);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* GET /assessments/<phash> — detailed breakdown */
@@ -565,10 +561,10 @@ static void handle_http(int cfd)
             }
             snprintf(body + pos, sizeof(body) - (size_t)pos, "]}");
             http_send(cfd, 200, body);
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
         http_send(cfd, 404, "{\"error\":\"not found\"}");
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* GET /agents — per-agent confidence weights */
@@ -585,7 +581,7 @@ static void handle_http(int cfd)
         }
         snprintf(body + pos, sizeof(body) - (size_t)pos, "]");
         http_send(cfd, 200, body);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* GET /peers */
@@ -593,7 +589,7 @@ static void handle_http(int cfd)
         char body[HTTP_BUF_SZ];
         peer_list_json(&g_peers, body, sizeof(body));
         http_send(cfd, 200, body);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /*
@@ -602,7 +598,7 @@ static void handle_http(int cfd)
      */
     if (strcmp(method, "POST") == 0 && strcmp(path, "/data/vote") == 0) {
         char *body_start = strstr(req, "\r\n\r\n");
-        if (!body_start) { http_send(cfd, 400, "{\"error\":\"no body\"}"); close(cfd); return; }
+        if (!body_start) { http_send(cfd, 400, "{\"error\":\"no body\"}"); compat_close_socket(cfd); return; }
         body_start += 4;
 
         /* Simple key extraction */
@@ -629,20 +625,20 @@ static void handle_http(int cfd)
 
         if (hash[0] == '\0') {
             http_send(cfd, 400, "{\"error\":\"hash required\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
         publish_data_vote(hash, approve, reason);
         http_send(cfd, 200, "{\"ok\":true}");
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     if (strcmp(method, "OPTIONS") == 0) {
         http_send(cfd, 200, "{}");
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     http_send(cfd, 404, "{\"error\":\"not found\"}");
-    close(cfd);
+    compat_close_socket(cfd);
 }
 
 /* ── CLI usage ───────────────────────────────────────────────────────── */
@@ -683,6 +679,8 @@ int main(int argc, char *argv[])
         }
     }
 
+    compat_winsock_init();
+
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
 
@@ -710,7 +708,7 @@ int main(int argc, char *argv[])
 
     /* ── HTTP server ── */
     g_http_fd = http_listen(g_http_port);
-    if (g_http_fd < 0) {
+    if (g_http_fd == COMPAT_INVALID_SOCKET) {
         fprintf(stderr, "[oracle] failed to bind HTTP on port %u\n", g_http_port);
         mqtt_transport_close(&g_mqtt);
         return 1;
@@ -732,10 +730,10 @@ int main(int argc, char *argv[])
         FD_ZERO(&rfds);
         FD_SET(g_http_fd, &rfds);
         struct timeval tv = {1, 0};
-        if (select(g_http_fd + 1, &rfds, NULL, NULL, &tv) > 0 &&
+        if (select(COMPAT_SELECT_NFDS(g_http_fd), &rfds, NULL, NULL, &tv) > 0 &&
             FD_ISSET(g_http_fd, &rfds)) {
-            int cfd = accept(g_http_fd, NULL, NULL);
-            if (cfd >= 0) handle_http(cfd);
+            compat_socket_t cfd = accept(g_http_fd, NULL, NULL);
+            if (cfd != COMPAT_INVALID_SOCKET) handle_http(cfd);
         }
 
         /* Sync MQTT I/O */
@@ -789,6 +787,7 @@ int main(int argc, char *argv[])
 
     printf("[oracle] shutting down\n");
     mqtt_transport_close(&g_mqtt);
-    if (g_http_fd >= 0) close(g_http_fd);
+    if (g_http_fd != COMPAT_INVALID_SOCKET) compat_close_socket(g_http_fd);
+    compat_winsock_cleanup();
     return 0;
 }
