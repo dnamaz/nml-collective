@@ -34,16 +34,12 @@
 /* Direct MQTT publish for MSG_SPEC */
 #include "../../edge/mqtt/mqtt.h"
 
+#include "compat.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <signal.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <sys/select.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <stdint.h>
 
 /* ── Constants ───────────────────────────────────────────────────────── */
@@ -136,7 +132,7 @@ static int rate_check(const char *ip)
     /* New IP */
     int slot = (g_rate_count < MAX_RATE_ENTRIES)
                ? g_rate_count++ : (int)(now % MAX_RATE_ENTRIES);
-    strncpy(g_rate[slot].ip, ip, sizeof(g_rate[slot].ip) - 1);
+    snprintf(g_rate[slot].ip, sizeof(g_rate[slot].ip), "%s", ip);
     g_rate[slot].count        = 1;
     g_rate[slot].window_start = now;
     return 1;
@@ -194,16 +190,16 @@ static int internal_http(const char *host, uint16_t port,
     addr.sin_port        = htons(port);
     addr.sin_addr.s_addr = inet_addr(host);
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == COMPAT_INVALID_SOCKET) return -1;
 
     /* Short timeout via select */
     struct timeval tv = {WEBHOOK_TIMEOUT_S, 0};
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, COMPAT_SOCKOPT_CAST(&tv), sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, COMPAT_SOCKOPT_CAST(&tv), sizeof(tv));
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(fd); return -1;
+        compat_close_socket(fd); return -1;
     }
 
     char req[4096];
@@ -223,11 +219,11 @@ static int internal_http(const char *host, uint16_t port,
             "Connection: close\r\n\r\n",
             method, path, host, port);
     }
-    write(fd, req, (size_t)req_len);
+    send(fd, req, (size_t)req_len, 0);
 
     char raw[HTTP_BUF_SZ];
-    ssize_t rn = read(fd, raw, sizeof(raw) - 1);
-    close(fd);
+    int rn = recv(fd, raw, sizeof(raw) - 1, 0);
+    compat_close_socket(fd);
     if (rn <= 0) return -1;
     raw[rn] = '\0';
 
@@ -254,14 +250,14 @@ static void webhook_fire(const char *event, const char *payload)
 
         /* Parse host and path from URL (http://host:port/path) */
         char url[512];
-        strncpy(url, w->url, sizeof(url) - 1);
+        snprintf(url, sizeof(url), "%s", w->url);
         char *p = strstr(url, "://");
         if (!p) continue;
         p += 3;
         char *slash = strchr(p, '/');
-        char path[256] = "/";
+        char path[512] = "/";
         if (slash) {
-            strncpy(path, slash, sizeof(path) - 1);
+            snprintf(path, sizeof(path), "%s", slash);
             *slash = '\0';
         }
         /* Parse host:port */
@@ -274,7 +270,7 @@ static void webhook_fire(const char *event, const char *payload)
             memcpy(whost, p, hlen);
             wport = (uint16_t)atoi(colon + 1);
         } else {
-            strncpy(whost, p, sizeof(whost) - 1);
+            snprintf(whost, sizeof(whost), "%s", p);
         }
 
         char body[2048];
@@ -337,7 +333,7 @@ static void poll_oracle(void)
             e = &g_results[g_results_next % MAX_RESULTS];
             g_results_next++;
         }
-        strncpy(e->phash, phash, sizeof(e->phash) - 1);
+        snprintf(e->phash, sizeof(e->phash), "%s", phash);
         e->weighted_mean = json_float(detail, "weighted_mean", 0.0f);
         e->confidence    = json_float(detail, "confidence",    0.0f);
         e->vote_count    = 0;
@@ -359,14 +355,14 @@ static void poll_oracle(void)
 
 /* ── HTTP server helpers ─────────────────────────────────────────────── */
 
-static int g_http_fd = -1;
+static compat_socket_t g_http_fd = COMPAT_INVALID_SOCKET;
 
-static int http_listen(uint16_t port)
+static compat_socket_t http_listen(uint16_t port)
 {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == COMPAT_INVALID_SOCKET) return COMPAT_INVALID_SOCKET;
     int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, COMPAT_SOCKOPT_CAST(&one), sizeof(one));
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family      = AF_INET;
@@ -374,19 +370,20 @@ static int http_listen(uint16_t port)
     addr.sin_port        = htons(port);
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
         listen(fd, 16) < 0) {
-        close(fd); return -1;
+        compat_close_socket(fd); return COMPAT_INVALID_SOCKET;
     }
     return fd;
 }
 
-static void http_send(int fd, int code, const char *body)
+static void http_send(compat_socket_t fd, int code, const char *body)
 {
-    char hdr[256];
+    char hdr[512];
     int hdr_len = snprintf(hdr, sizeof(hdr),
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: application/json\r\n"
         "Content-Length: %zu\r\n"
         "Access-Control-Allow-Origin: *\r\n"
+        "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
         "Connection: close\r\n\r\n",
         code, code == 200 ? "OK"
              : code == 201 ? "Created"
@@ -395,8 +392,8 @@ static void http_send(int fd, int code, const char *body)
              : code == 429 ? "Too Many Requests"
              : "Error",
         strlen(body));
-    write(fd, hdr, (size_t)hdr_len);
-    write(fd, body, strlen(body));
+    send(fd, hdr, (size_t)hdr_len, 0);
+    send(fd, body, strlen(body), 0);
 }
 
 /*
@@ -413,34 +410,34 @@ static int check_auth(const char *req)
 
 /* ── Route handlers ──────────────────────────────────────────────────── */
 
-static void handle_http(int cfd, const char *client_ip)
+static void handle_http(compat_socket_t cfd, const char *client_ip)
 {
     char req[HTTP_BUF_SZ];
-    ssize_t n = read(cfd, req, sizeof(req) - 1);
-    if (n <= 0) { close(cfd); return; }
+    int n = recv(cfd, req, sizeof(req) - 1, 0);
+    if (n <= 0) { compat_close_socket(cfd); return; }
     req[n] = '\0';
 
     char method[8], path[256];
     if (sscanf(req, "%7s %255s", method, path) != 2) {
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* Rate limiting */
     if (!rate_check(client_ip)) {
         http_send(cfd, 429, "{\"error\":\"rate limit exceeded\"}");
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* OPTIONS preflight */
     if (strcmp(method, "OPTIONS") == 0) {
         http_send(cfd, 200, "{}");
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* Authentication */
     if (!check_auth(req)) {
         http_send(cfd, 401, "{\"error\":\"unauthorized\"}");
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* ── GET /health ── */
@@ -451,7 +448,7 @@ static void handle_http(int cfd, const char *client_ip)
              "\"peers\":%d,\"results\":%d,\"webhooks\":%d}",
             g_agent_name, g_peers.count, g_results_count, g_webhook_count);
         http_send(cfd, 200, body);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* ── GET /status ── */
@@ -467,7 +464,7 @@ static void handle_http(int cfd, const char *client_ip)
              "\"webhooks_active\":%d}",
             g_agent_name, peers_json, g_results_count, g_webhook_count);
         http_send(cfd, 200, body);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* ── GET /peers ── */
@@ -475,7 +472,7 @@ static void handle_http(int cfd, const char *client_ip)
         char body[HTTP_BUF_SZ];
         peer_list_json(&g_peers, body, sizeof(body));
         http_send(cfd, 200, body);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* ── GET /results ── */
@@ -493,12 +490,12 @@ static void handle_http(int cfd, const char *client_ip)
         }
         snprintf(body + pos, sizeof(body) - (size_t)pos, "]");
         http_send(cfd, 200, body);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* ── GET /results/<phash> — proxy to Oracle ── */
     if (strcmp(method, "GET") == 0 && strncmp(path, "/results/", 9) == 0) {
-        char oracle_path[256];
+        char oracle_path[512];
         snprintf(oracle_path, sizeof(oracle_path),
                  "/assessments/%s", path + 9);
         char resp[4096];
@@ -509,7 +506,7 @@ static void handle_http(int cfd, const char *client_ip)
         } else {
             http_send(cfd, 404, "{\"error\":\"not found\"}");
         }
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* ── POST /data — ingest external data, proxy to Sentient ── */
@@ -517,7 +514,7 @@ static void handle_http(int cfd, const char *client_ip)
         char *body_start = strstr(req, "\r\n\r\n");
         if (!body_start) {
             http_send(cfd, 400, "{\"error\":\"no body\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
         body_start += 4;
 
@@ -529,7 +526,7 @@ static void handle_http(int cfd, const char *client_ip)
         } else {
             http_send(cfd, 502, "{\"error\":\"sentient unavailable\"}");
         }
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* ── GET /quarantine — proxy to Sentient ── */
@@ -542,7 +539,7 @@ static void handle_http(int cfd, const char *client_ip)
         } else {
             http_send(cfd, 502, "{\"error\":\"sentient unavailable\"}");
         }
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* ── POST /spec — request program generation via Architect ── */
@@ -550,14 +547,14 @@ static void handle_http(int cfd, const char *client_ip)
         char *body_start = strstr(req, "\r\n\r\n");
         if (!body_start) {
             http_send(cfd, 400, "{\"error\":\"no body\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
         body_start += 4;
 
         char spec[512] = {0};
         if (json_str(body_start, "spec", spec, sizeof(spec)) <= 0) {
             http_send(cfd, 400, "{\"error\":\"spec required\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
 
         /* Encode as MSG_SPEC and publish to nml/spec */
@@ -573,7 +570,7 @@ static void handle_http(int cfd, const char *client_ip)
 
         http_send(cfd, 201, "{\"ok\":true,\"queued\":true}");
         printf("[emissary] spec queued: %.60s\n", spec);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* ── GET /webhooks ── */
@@ -592,7 +589,7 @@ static void handle_http(int cfd, const char *client_ip)
         }
         snprintf(body + pos, sizeof(body) - (size_t)pos, "]");
         http_send(cfd, 200, body);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* ── POST /webhooks ── */
@@ -600,7 +597,7 @@ static void handle_http(int cfd, const char *client_ip)
         char *body_start = strstr(req, "\r\n\r\n");
         if (!body_start) {
             http_send(cfd, 400, "{\"error\":\"no body\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
         body_start += 4;
 
@@ -611,25 +608,25 @@ static void handle_http(int cfd, const char *client_ip)
 
         if (url[0] == '\0') {
             http_send(cfd, 400, "{\"error\":\"url required\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
         if (g_webhook_count >= MAX_WEBHOOKS) {
             http_send(cfd, 429, "{\"error\":\"webhook limit reached\"}");
-            close(cfd); return;
+            compat_close_socket(cfd); return;
         }
 
         Webhook *w = &g_webhooks[g_webhook_count++];
         w->id     = g_webhook_next_id++;
         w->active = 1;
-        strncpy(w->url,    url,    sizeof(w->url) - 1);
-        strncpy(w->events, events, sizeof(w->events) - 1);
+        snprintf(w->url,    sizeof(w->url),    "%s", url);
+        snprintf(w->events, sizeof(w->events), "%s", events);
 
         char resp[128];
         snprintf(resp, sizeof(resp), "{\"id\":%d}", w->id);
         http_send(cfd, 201, resp);
         printf("[emissary] webhook %d registered: %s  events=%s\n",
                w->id, url, events);
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     /* ── DELETE /webhooks/<id> ── */
@@ -640,15 +637,15 @@ static void handle_http(int cfd, const char *client_ip)
             if (g_webhooks[i].id == target_id && g_webhooks[i].active) {
                 g_webhooks[i].active = 0;
                 http_send(cfd, 200, "{\"ok\":true}");
-                close(cfd); return;
+                compat_close_socket(cfd); return;
             }
         }
         http_send(cfd, 404, "{\"error\":\"webhook not found\"}");
-        close(cfd); return;
+        compat_close_socket(cfd); return;
     }
 
     http_send(cfd, 404, "{\"error\":\"not found\"}");
-    close(cfd);
+    compat_close_socket(cfd);
 }
 
 /* ── CLI usage ───────────────────────────────────────────────────────── */
@@ -672,25 +669,27 @@ int main(int argc, char *argv[])
         if (strcmp(argv[i], "--name") == 0 && i + 1 < argc)
             g_agent_name = argv[++i];
         else if (strcmp(argv[i], "--broker") == 0 && i + 1 < argc)
-            strncpy(g_broker_host, argv[++i], sizeof(g_broker_host) - 1);
+            snprintf(g_broker_host, sizeof(g_broker_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--broker-port") == 0 && i + 1 < argc)
             g_broker_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc)
             g_http_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--api-key") == 0 && i + 1 < argc)
-            strncpy(g_api_key, argv[++i], sizeof(g_api_key) - 1);
+            snprintf(g_api_key, sizeof(g_api_key), "%s", argv[++i]);
         else if (strcmp(argv[i], "--sentient") == 0 && i + 1 < argc)
-            strncpy(g_sentient_host, argv[++i], sizeof(g_sentient_host) - 1);
+            snprintf(g_sentient_host, sizeof(g_sentient_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--sentient-port") == 0 && i + 1 < argc)
             g_sentient_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--oracle") == 0 && i + 1 < argc)
-            strncpy(g_oracle_host, argv[++i], sizeof(g_oracle_host) - 1);
+            snprintf(g_oracle_host, sizeof(g_oracle_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--oracle-port") == 0 && i + 1 < argc)
             g_oracle_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]); return 0;
         }
     }
+
+    compat_winsock_init();
 
     signal(SIGINT,  on_signal);
     signal(SIGTERM, on_signal);
@@ -719,7 +718,7 @@ int main(int argc, char *argv[])
 
     /* ── HTTP server ── */
     g_http_fd = http_listen(g_http_port);
-    if (g_http_fd < 0) {
+    if (g_http_fd == COMPAT_INVALID_SOCKET) {
         fprintf(stderr, "[emissary] failed to bind HTTP on port %u\n",
                 g_http_port);
         mqtt_transport_close(&g_mqtt);
@@ -745,13 +744,13 @@ int main(int argc, char *argv[])
         FD_ZERO(&rfds);
         FD_SET(g_http_fd, &rfds);
         struct timeval tv = {1, 0};
-        if (select(g_http_fd + 1, &rfds, NULL, NULL, &tv) > 0 &&
+        if (select(COMPAT_SELECT_NFDS(g_http_fd), &rfds, NULL, NULL, &tv) > 0 &&
             FD_ISSET(g_http_fd, &rfds)) {
             struct sockaddr_in client_addr;
             socklen_t addr_len = sizeof(client_addr);
-            int cfd = accept(g_http_fd,
+            compat_socket_t cfd = accept(g_http_fd,
                              (struct sockaddr *)&client_addr, &addr_len);
-            if (cfd >= 0) {
+            if (cfd != COMPAT_INVALID_SOCKET) {
                 char client_ip[46];
                 inet_ntop(AF_INET, &client_addr.sin_addr,
                           client_ip, sizeof(client_ip));
@@ -813,6 +812,7 @@ int main(int argc, char *argv[])
 
     printf("[emissary] shutting down\n");
     mqtt_transport_close(&g_mqtt);
-    if (g_http_fd >= 0) close(g_http_fd);
+    if (g_http_fd != COMPAT_INVALID_SOCKET) compat_close_socket(g_http_fd);
+    compat_winsock_cleanup();
     return 0;
 }

@@ -23,22 +23,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <time.h>
-#include <signal.h>
 #include <errno.h>
-#include <unistd.h>
+
+#include "../../edge/compat.h"
+
+#ifdef COMPAT_POSIX
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <sys/stat.h>
-#include <sys/socket.h>
-#include <sys/select.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+#endif
 
 /* ── Constants ───────────────────────────────────────────────────────── */
 
 #define MAX_CREDS          128
-#define MAX_PATH_LEN       256
+#define MAX_PATH_LEN       512
 #define HTTP_BUF_SZ        8192
 #define JSON_VAL_SZ        256
 #define MAX_RESTARTS       20
@@ -49,8 +48,8 @@
 /* ── Types ───────────────────────────────────────────────────────────── */
 
 typedef struct {
-    char   name[64];
-    char   role[32];
+    char   name[JSON_VAL_SZ];
+    char   role[JSON_VAL_SZ];
     time_t issued_at;
 } CredEntry;
 
@@ -59,7 +58,12 @@ typedef struct {
 static volatile int g_running = 1;
 static void on_signal(int sig) { (void)sig; g_running = 0; }
 
+#ifdef COMPAT_WINDOWS
+static HANDLE g_broker_handle     = NULL;
+static DWORD  g_broker_pid        = 0;
+#else
 static pid_t  g_broker_pid        = -1;
+#endif
 static int    g_broker_running    = 0;
 static int    g_broker_restarts   = 0;
 static time_t g_broker_last_start = 0;
@@ -71,9 +75,9 @@ static const char *g_agent_name = "herald";
 static int         g_broker_port = 1883;
 static int         g_api_port    = 7780;
 static char        g_config_dir[MAX_PATH_LEN];
-static char        g_conf_file[MAX_PATH_LEN];
-static char        g_passwd_file[MAX_PATH_LEN];
-static char        g_acl_file[MAX_PATH_LEN];
+static char        g_conf_file[MAX_PATH_LEN + 32];
+static char        g_passwd_file[MAX_PATH_LEN + 32];
+static char        g_acl_file[MAX_PATH_LEN + 32];
 static char        g_mosquitto_bin[MAX_PATH_LEN];
 static char        g_mosquitto_passwd_bin[MAX_PATH_LEN];
 static int         g_no_auth = 0;
@@ -153,6 +157,142 @@ static int write_acl_file(void)
 }
 
 /* ── Broker process management ───────────────────────────────────────── */
+
+#ifdef COMPAT_WINDOWS
+
+/* ── Windows: CreateProcess / TerminateProcess ─────────────────────── */
+
+static int run_command(const char *bin, char *const argv[])
+{
+    /* Build a flat command line from argv[] */
+    char cmdline[2048];
+    int pos = 0;
+    for (int i = 0; argv[i]; i++) {
+        if (i > 0) cmdline[pos++] = ' ';
+        pos += snprintf(cmdline + pos, sizeof(cmdline) - (size_t)pos,
+                        "%s", argv[i]);
+    }
+
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    memset(&pi, 0, sizeof(pi));
+
+    if (!CreateProcessA(bin, cmdline, NULL, NULL, FALSE,
+                        0, NULL, NULL, &si, &pi)) {
+        fprintf(stderr, "[%s] CreateProcess %s failed (err=%lu)\n",
+                g_agent_name, bin, GetLastError());
+        return -1;
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return (int)code;
+}
+
+static int broker_start(void)
+{
+    if (g_broker_running && g_broker_handle) {
+        return 0;
+    }
+
+    time_t now = time(NULL);
+    if (g_broker_last_start > 0 &&
+        (now - g_broker_last_start) < RESTART_DELAY_SEC) {
+        return 0;
+    }
+
+    if (g_broker_restarts >= MAX_RESTARTS) {
+        fprintf(stderr, "[%s] broker exceeded max restarts\n", g_agent_name);
+        g_running = 0;
+        return -1;
+    }
+
+    char cmdline[2048];
+    snprintf(cmdline, sizeof(cmdline), "\"%s\" -c \"%s\"",
+             g_mosquitto_bin, g_conf_file);
+
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    memset(&pi, 0, sizeof(pi));
+
+    if (!CreateProcessA(NULL, cmdline, NULL, NULL, FALSE,
+                        0, NULL, NULL, &si, &pi)) {
+        fprintf(stderr, "[%s] CreateProcess failed (err=%lu)\n",
+                g_agent_name, GetLastError());
+        return -1;
+    }
+
+    g_broker_handle = pi.hProcess;
+    g_broker_pid = pi.dwProcessId;
+    CloseHandle(pi.hThread);
+    g_broker_running = 1;
+    g_broker_restarts++;
+    g_broker_last_start = now;
+
+    printf("[%s] broker started (pid=%lu, restart=%d)\n",
+           g_agent_name, (unsigned long)g_broker_pid, g_broker_restarts);
+    return 0;
+}
+
+static void broker_reload(void)
+{
+    /* Windows has no SIGHUP equivalent for Mosquitto — restart instead */
+    if (g_broker_handle) {
+        printf("[%s] reload requested — restarting broker on Windows\n",
+               g_agent_name);
+        /* broker_check will detect exit and trigger restart */
+        TerminateProcess(g_broker_handle, 0);
+    }
+}
+
+static void broker_stop(void)
+{
+    if (!g_broker_handle) {
+        return;
+    }
+
+    printf("[%s] stopping broker (pid=%lu)\n",
+           g_agent_name, (unsigned long)g_broker_pid);
+
+    /* Give broker 5 seconds to exit gracefully */
+    TerminateProcess(g_broker_handle, 0);
+    WaitForSingleObject(g_broker_handle, 5000);
+
+    CloseHandle(g_broker_handle);
+    g_broker_handle = NULL;
+    g_broker_pid = 0;
+    g_broker_running = 0;
+}
+
+static int broker_check(void)
+{
+    if (!g_broker_handle) {
+        return 1; /* not running */
+    }
+
+    DWORD result = WaitForSingleObject(g_broker_handle, 0);
+    if (result == WAIT_TIMEOUT) {
+        return 0; /* still running */
+    }
+
+    DWORD code = 0;
+    GetExitCodeProcess(g_broker_handle, &code);
+    printf("[%s] broker exited (status=%lu), will restart\n",
+           g_agent_name, (unsigned long)code);
+    CloseHandle(g_broker_handle);
+    g_broker_handle = NULL;
+    g_broker_pid = 0;
+    g_broker_running = 0;
+    return 1;
+}
+
+#else /* POSIX */
 
 static int run_command(const char *bin, char *const argv[])
 {
@@ -276,6 +416,8 @@ static int broker_check(void)
 
     return 0;
 }
+
+#endif /* COMPAT_WINDOWS / POSIX */
 
 /* ── Credential management ───────────────────────────────────────────── */
 
@@ -460,7 +602,7 @@ static int json_str(const char *json, const char *key,
     return 0;
 }
 
-static void http_respond(int fd, int status, const char *body)
+static void http_respond(compat_socket_t fd, int status, const char *body)
 {
     const char *status_str;
     switch (status) {
@@ -473,22 +615,24 @@ static void http_respond(int fd, int status, const char *body)
 
     size_t body_len = body ? strlen(body) : 0;
 
-    char header[512];
+    char header[1024];
     snprintf(header, sizeof(header),
              "HTTP/1.0 %d %s\r\n"
              "Content-Type: application/json\r\n"
              "Content-Length: %zu\r\n"
+             "Access-Control-Allow-Origin: *\r\n"
+             "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
              "Connection: close\r\n"
              "\r\n",
              status, status_str, body_len);
 
-    write(fd, header, strlen(header));
+    send(fd, header, strlen(header), 0);
     if (body && body_len > 0) {
-        write(fd, body, body_len);
+        send(fd, body, body_len, 0);
     }
 }
 
-static void handle_health(int fd)
+static void handle_health(compat_socket_t fd)
 {
     char body[512];
     snprintf(body, sizeof(body),
@@ -504,7 +648,7 @@ static void handle_health(int fd)
     http_respond(fd, 200, body);
 }
 
-static void handle_issue(int fd, const char *body)
+static void handle_issue(compat_socket_t fd, const char *body)
 {
     char agent[JSON_VAL_SZ];
     char password[JSON_VAL_SZ];
@@ -525,13 +669,13 @@ static void handle_issue(int fd, const char *body)
         return;
     }
 
-    char resp[512];
+    char resp[1024];
     snprintf(resp, sizeof(resp),
              "{\"issued\":\"%s\",\"role\":\"%s\"}", agent, role);
     http_respond(fd, 200, resp);
 }
 
-static void handle_revoke(int fd, const char *body)
+static void handle_revoke(compat_socket_t fd, const char *body)
 {
     char agent[JSON_VAL_SZ];
 
@@ -542,15 +686,15 @@ static void handle_revoke(int fd, const char *body)
 
     cred_revoke(agent);
 
-    char resp[256];
+    char resp[512];
     snprintf(resp, sizeof(resp), "{\"revoked\":\"%s\"}", agent);
     http_respond(fd, 200, resp);
 }
 
-static void http_serve_once(int server_fd)
+static void http_serve_once(compat_socket_t server_fd)
 {
-    int client_fd = accept(server_fd, NULL, NULL);
-    if (client_fd < 0) {
+    compat_socket_t client_fd = accept(server_fd, NULL, NULL);
+    if (client_fd == COMPAT_INVALID_SOCKET) {
         return;
     }
 
@@ -560,7 +704,7 @@ static void http_serve_once(int server_fd)
 
     /* read until \r\n\r\n found or buffer full */
     while (total < HTTP_BUF_SZ - 1) {
-        int n = (int)read(client_fd, buf + total, (size_t)(HTTP_BUF_SZ - 1 - total));
+        int n = (int)recv(client_fd, buf + total, (size_t)(HTTP_BUF_SZ - 1 - total), 0);
         if (n <= 0) {
             break;
         }
@@ -573,7 +717,7 @@ static void http_serve_once(int server_fd)
     }
 
     if (!found_headers) {
-        close(client_fd);
+        compat_close_socket(client_fd);
         return;
     }
 
@@ -603,8 +747,8 @@ static void http_serve_once(int server_fd)
 
         int body_have = (int)(buf + total - body_ptr);
         while (body_have < content_length && total < HTTP_BUF_SZ - 1) {
-            int n = (int)read(client_fd, buf + total,
-                              (size_t)(HTTP_BUF_SZ - 1 - total));
+            int n = (int)recv(client_fd, buf + total,
+                              (size_t)(HTTP_BUF_SZ - 1 - total), 0);
             if (n <= 0) {
                 break;
             }
@@ -636,19 +780,19 @@ static void http_serve_once(int server_fd)
         http_respond(client_fd, 404, "{\"error\":\"not found\"}");
     }
 
-    close(client_fd);
+    compat_close_socket(client_fd);
 }
 
-static int make_server_socket(int port)
+static compat_socket_t make_server_socket(int port)
 {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
+    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == COMPAT_INVALID_SOCKET) {
         fprintf(stderr, "[%s] socket: %s\n", g_agent_name, strerror(errno));
-        return -1;
+        return COMPAT_INVALID_SOCKET;
     }
 
     int opt = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, COMPAT_SOCKOPT_CAST(&opt), sizeof(opt));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -659,14 +803,14 @@ static int make_server_socket(int port)
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         fprintf(stderr, "[%s] bind port %d: %s\n",
                 g_agent_name, port, strerror(errno));
-        close(fd);
-        return -1;
+        compat_close_socket(fd);
+        return COMPAT_INVALID_SOCKET;
     }
 
     if (listen(fd, 8) < 0) {
         fprintf(stderr, "[%s] listen: %s\n", g_agent_name, strerror(errno));
-        close(fd);
-        return -1;
+        compat_close_socket(fd);
+        return COMPAT_INVALID_SOCKET;
     }
 
     return fd;
@@ -708,13 +852,15 @@ int main(int argc, char *argv[])
         }
     }
 
+    compat_winsock_init();
+
     /* build derived paths */
     snprintf(g_conf_file,   sizeof(g_conf_file),   "%s/mosquitto.conf", g_config_dir);
     snprintf(g_passwd_file, sizeof(g_passwd_file),  "%s/passwd",         g_config_dir);
     snprintf(g_acl_file,    sizeof(g_acl_file),     "%s/acl",            g_config_dir);
 
     /* create config directory */
-    if (mkdir(g_config_dir, 0755) < 0 && errno != EEXIST) {
+    if (compat_mkdir(g_config_dir, 0755) < 0 && errno != EEXIST) {
         fprintf(stderr, "[%s] warning: mkdir %s: %s\n",
                 g_agent_name, g_config_dir, strerror(errno));
     }
@@ -728,6 +874,10 @@ int main(int argc, char *argv[])
     }
 
     /* signals */
+#ifdef COMPAT_WINDOWS
+    signal(SIGINT,  on_signal);
+    signal(SIGTERM, on_signal);
+#else
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_signal;
@@ -738,6 +888,7 @@ int main(int argc, char *argv[])
     memset(&sa_ign, 0, sizeof(sa_ign));
     sa_ign.sa_handler = SIG_IGN;
     sigaction(SIGPIPE, &sa_ign, NULL);
+#endif
 
     /* write config and start broker */
     if (write_mosquitto_conf() < 0) {
@@ -750,8 +901,8 @@ int main(int argc, char *argv[])
     }
 
     /* REST API server */
-    int server_fd = make_server_socket(g_api_port);
-    if (server_fd < 0) {
+    compat_socket_t server_fd = make_server_socket(g_api_port);
+    if (server_fd == COMPAT_INVALID_SOCKET) {
         fprintf(stderr, "[%s] failed to create REST API socket on port %d\n",
                 g_agent_name, g_api_port);
         broker_stop();
@@ -779,7 +930,7 @@ int main(int argc, char *argv[])
         tv.tv_sec  = BROKER_CHECK_SEC;
         tv.tv_usec = 0;
 
-        int sel = select(server_fd + 1, &rfds, NULL, NULL, &tv);
+        int sel = select(COMPAT_SELECT_NFDS(server_fd), &rfds, NULL, NULL, &tv);
 
         if (sel > 0 && FD_ISSET(server_fd, &rfds)) {
             http_serve_once(server_fd);
@@ -799,7 +950,8 @@ int main(int argc, char *argv[])
     }
 
     printf("[%s] shutting down\n", g_agent_name);
-    close(server_fd);
+    compat_close_socket(server_fd);
     broker_stop();
+    compat_winsock_cleanup();
     return 0;
 }

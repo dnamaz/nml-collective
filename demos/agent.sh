@@ -50,7 +50,13 @@ done
 PORT="${PORT:-9001}"
 NAME="${NAME:-${ROLE}_${PORT}}"
 
-BIN="roles/$ROLE/${ROLE}_agent"
+# Platform binary extension (.exe on Windows/MSYS/MinGW, empty on POSIX)
+_EXT=""
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*) _EXT=".exe" ;;
+esac
+
+BIN="roles/$ROLE/${ROLE}_agent${_EXT}"
 if [[ ! -f "$BIN" ]]; then
     echo "[BUILD] Building $ROLE..."
     make -C "roles/$ROLE" 2>&1 | tail -3
@@ -59,7 +65,7 @@ fi
 if [[ "$ROLE" == "herald" ]]; then
     # Herald IS the broker — no --broker flags
     echo "[$NAME] Starting herald (MQTT broker) on :${BROKER_PORT}"
-    exec "$BIN" --broker-port "$BROKER_PORT" --http-port "$PORT" "${PASSTHROUGH[@]}"
+    exec "$BIN" --broker-port "$BROKER_PORT" --api-port "$PORT" "${PASSTHROUGH[@]}"
 else
     ARGS=(--name "$NAME" --port "$PORT"
           --broker "$BROKER_HOST" --broker-port "$BROKER_PORT"

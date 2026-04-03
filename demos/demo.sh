@@ -42,12 +42,24 @@ nml_check_build
 
 # ── Phase 1: Infrastructure ───────────────────────────────
 echo "━━━ Phase 1: Starting infrastructure ━━━"
-nml_start_herald
-sleep 3   # wait for Mosquitto
+nml_start_herald --no-auth
 
-nml_start sentient  prime    9001 --data demos/agent1.nml.data
+# Wait for Mosquitto to be fully ready (up to 20 seconds)
+echo -n "  Waiting for broker..."
+for _i in $(seq 1 40); do
+    # mosquitto_sub --help test would work, but simplest: just wait
+    # for the port AND give Mosquitto time to finish its init
+    if (: < /dev/tcp/"$BROKER_HOST"/"$BROKER_PORT") 2>/dev/null; then
+        sleep 3   # Mosquitto opens port before it's fully ready for MQTT
+        echo " ready"
+        break
+    fi
+    sleep 0.5
+done
+
+nml_start sentient  prime    9001
 sleep 1
-nml_start custodian vault    9010 --sentient-url "http://localhost:9001"
+nml_start custodian vault    9010
 sleep 2
 
 # ── Phase 2: Compute layer ────────────────────────────────
@@ -60,7 +72,7 @@ sleep 1
 
 # Enforcer has no HTTP port — start it directly
 echo "[guardian] Starting enforcer (MQTT daemon)"
-roles/enforcer/enforcer_agent \
+"roles/enforcer/enforcer_agent${_EXT}" \
     --name guardian \
     --broker "$BROKER_HOST" --broker-port "$BROKER_PORT" &
 PIDS+=($!)
