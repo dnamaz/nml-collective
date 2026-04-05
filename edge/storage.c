@@ -277,3 +277,28 @@ int storage_content_len(const char *dir, const char *hash)
     fclose(f);
     return clen;
 }
+
+/* ── storage_content_offset ──────────────────────────────────────────────── */
+
+/*
+ * Return the byte offset from the start of the .obj file to the first byte of
+ * the content payload.  This is the position immediately after the
+ * content_len field in the NebulaDisk header.
+ *
+ * Returns >= 0 on success, -1 on parse failure.
+ */
+long storage_content_offset(const char *dir, const char *hash)
+{
+    char fpath[512];
+    obj_path(dir, hash, fpath, sizeof(fpath));
+
+    FILE *f = fopen(fpath, "rb");
+    if (!f) return -1;
+
+    int clen = read_content_len(f);  /* positions file cursor at content start */
+    if (clen < 0) { fclose(f); return -1; }
+
+    long offset = ftell(f);
+    fclose(f);
+    return offset;
+}

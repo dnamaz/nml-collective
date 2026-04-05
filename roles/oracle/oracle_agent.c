@@ -35,6 +35,7 @@
 #include <time.h>
 #include <math.h>
 #include <stdint.h>
+#include <unistd.h>
 
 /* ── Constants ───────────────────────────────────────────────────────── */
 
@@ -109,8 +110,25 @@ static uint16_t g_broker_port    = 1883;
 static uint16_t g_http_port      = 9002;
 static int g_quorum              = 1;
 static char g_llm_host[128]      = {0};
-static uint16_t g_llm_port       = 8080;
-static char g_llm_path[256]      = "/v1/chat/completions";
+static uint16_t g_llm_port       = 443;
+static char g_llm_path[256]      = "/api/v1/chat/completions";
+static char g_llm_api_key[256]   = {0};
+static char g_llm_model[128]     = "openai/gpt-4o-mini";
+static char g_llm_provider[32]   = "openai";  /* "openai" or "anthropic" */
+
+static char g_think_host[128]    = {0};
+static uint16_t g_think_port     = 443;
+static char g_think_path[256]    = "/api/v1/chat/completions";
+static char g_think_model[128]   = {0};
+
+/* Code model — local NML code generation (nml-v09-merged-6bit).
+   When set, becomes stage 3; --llm-* becomes stage 1 context provider. */
+static char g_code_host[128]     = {0};
+static uint16_t g_code_port      = 8080;
+static char g_code_path[256]     = "/v1/chat/completions";
+static char g_code_model[128]    = {0};
+
+static char g_log_file[512]      = {0};
 
 /* ── AgentStat helpers ───────────────────────────────────────────────── */
 
@@ -248,6 +266,10 @@ static void oracle_assess(OracleSession *s)
     }
 }
 
+/* ── Forward declarations ────────────────────────────────────────────── */
+
+static void append_assessment_log(const OracleSession *s);
+
 /* ── MQTT publish helpers ────────────────────────────────────────────── */
 
 static void publish_assessment(const OracleSession *s)
@@ -283,6 +305,7 @@ static void publish_assessment(const OracleSession *s)
 
     printf("[oracle] assessed %s  weighted_mean=%.4f  confidence=%.4f  votes=%d\n",
            s->phash, s->weighted_mean, s->confidence, s->count);
+    append_assessment_log(s);
 }
 
 /*
@@ -336,75 +359,197 @@ static void handle_result(const char *sender, const char *payload)
 
 /* ── LLM spec generation ─────────────────────────────────────────────── */
 
+static void json_escape(const char *in, char *out, size_t out_sz)
+{
+    size_t j = 0;
+    for (size_t i = 0; in[i] && j + 2 < out_sz; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if      (c == '"')  { out[j++] = '\\'; out[j++] = '"'; }
+        else if (c == '\\') { out[j++] = '\\'; out[j++] = '\\'; }
+        else if (c == '\n') { out[j++] = '\\'; out[j++] = 'n'; }
+        else if (c == '\r') { out[j++] = '\\'; out[j++] = 'r'; }
+        else if (c == '\t') { out[j++] = '\\'; out[j++] = 't'; }
+        else                { out[j++] = c; }
+    }
+    out[j] = '\0';
+}
+
 /*
- * POST a prompt to an OpenAI-compatible /v1/chat/completions endpoint.
- * Extracts the text content from the first choice.
+ * POST a prompt to an LLM endpoint via curl.
+ * provider: "openai" (OpenAI-compatible, incl. OpenRouter + local mlx_lm)
+ *           "anthropic" (api.anthropic.com /v1/messages)
+ * api_key may be NULL for unauthenticated local models.
  * Returns chars written to out_buf, or -1 on failure.
  */
-static int llm_complete(const char *prompt, char *out_buf, size_t out_sz)
+static int llm_curl(const char *host, uint16_t port, const char *path,
+                    const char *api_key, const char *model,
+                    const char *provider, const char *prompt,
+                    int max_tokens, char *out_buf, size_t out_sz)
 {
-    if (g_llm_host[0] == '\0') return -1;
+    if (!host || host[0] == '\0') return -1;
+    int is_anthropic = provider && strcmp(provider, "anthropic") == 0;
 
-    char req_body[2048];
-    int body_len = snprintf(req_body, sizeof(req_body),
-        "{\"model\":\"local\","
+    char esc[2048];
+    json_escape(prompt, esc, sizeof(esc));
+
+    char body[4096];
+    snprintf(body, sizeof(body),
+        "{\"model\":\"%s\","
          "\"messages\":[{\"role\":\"user\",\"content\":\"%s\"}],"
-         "\"max_tokens\":256}",
-        prompt);
+         "\"max_tokens\":%d}",
+        model, esc, max_tokens);
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_port        = htons(g_llm_port);
-    addr.sin_addr.s_addr = inet_addr(g_llm_host);
+    /* Write body to temp file — avoids all shell quoting issues */
+    char tmppath[64] = "/tmp/nml_llm_XXXXXX";
+    int tmpfd = mkstemp(tmppath);
+    if (tmpfd < 0) return -1;
+    write(tmpfd, body, strlen(body));
+    close(tmpfd);
 
-    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd == COMPAT_INVALID_SOCKET) return -1;
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        compat_close_socket(fd); return -1;
+    const char *scheme = (port == 443) ? "https" : "http";
+    char port_part[16] = "";
+    if (!((port == 443 && strcmp(scheme, "https") == 0) ||
+          (port == 80  && strcmp(scheme, "http")  == 0)))
+        snprintf(port_part, sizeof(port_part), ":%u", port);
+
+    char cmd[1280];
+    if (is_anthropic && api_key && api_key[0]) {
+        snprintf(cmd, sizeof(cmd),
+            "curl -s --max-time 30 -X POST '%s://%s%s%s' "
+            "-H 'x-api-key: %s' "
+            "-H 'anthropic-version: 2023-06-01' "
+            "-H 'Content-Type: application/json' "
+            "-d '@%s' 2>/dev/null",
+            scheme, host, port_part, path, api_key, tmppath);
+    } else if (api_key && api_key[0]) {
+        snprintf(cmd, sizeof(cmd),
+            "curl -s --max-time 30 -X POST '%s://%s%s%s' "
+            "-H 'Authorization: Bearer %s' "
+            "-H 'Content-Type: application/json' "
+            "-d '@%s' 2>/dev/null",
+            scheme, host, port_part, path, api_key, tmppath);
+    } else {
+        snprintf(cmd, sizeof(cmd),
+            "curl -s --max-time 30 -X POST '%s://%s%s%s' "
+            "-H 'Content-Type: application/json' "
+            "-d '@%s' 2>/dev/null",
+            scheme, host, port_part, path, tmppath);
     }
 
-    char http_req[4096];
-    int req_len = snprintf(http_req, sizeof(http_req),
-        "POST %s HTTP/1.1\r\n"
-        "Host: %s:%u\r\n"
-        "Content-Type: application/json\r\n"
-        "Content-Length: %d\r\n"
-        "Connection: close\r\n\r\n%s",
-        g_llm_path, g_llm_host, g_llm_port, body_len, req_body);
-    send(fd, http_req, (size_t)req_len, 0);
+    FILE *fp = popen(cmd, "r");
+    if (!fp) { unlink(tmppath); return -1; }
 
     char resp[8192];
-    int rn = recv(fd, resp, sizeof(resp) - 1, 0);
-    compat_close_socket(fd);
-    if (rn <= 0) return -1;
-    resp[rn] = '\0';
+    size_t total = 0, n;
+    while ((n = fread(resp + total, 1, sizeof(resp) - 1 - total, fp)) > 0)
+        total += n;
+    resp[total] = '\0';
+    pclose(fp);
+    unlink(tmppath);
 
-    /* Skip HTTP headers */
-    char *body = strstr(resp, "\r\n\r\n");
-    if (!body) return -1;
-    body += 4;
+    if (total == 0) return -1;
 
-    /* Extract first "content":"..." from response JSON */
-    char *p = strstr(body, "\"content\":");
+    /* Parse response: OpenAI returns "content":"<string>",
+       Anthropic returns "content":[{"type":"text","text":"<string>"}] */
+    char *p = strstr(resp, "\"content\":");
     if (!p) return -1;
     p += 10;
     while (*p == ' ') p++;
-    if (*p != '"') return -1;
-    p++;
+    if (*p == '[') {
+        /* Anthropic array format — find "text" field inside first block */
+        p = strstr(p, "\"text\":");
+        if (!p) return -1;
+        p += 7;
+        while (*p == ' ') p++;
+        if (*p != '"') return -1;
+        p++;
+    } else if (*p == '"') {
+        p++;
+    } else {
+        return -1;
+    }
 
     int i = 0;
     while (*p && *p != '"' && i < (int)out_sz - 1) {
-        if (*p == '\\' && *(p + 1)) p++;   /* skip escape prefix */
+        if (*p == '\\' && *(p + 1)) p++;
         out_buf[i++] = *p++;
     }
     out_buf[i] = '\0';
+
+    /* Thinking/reasoning models (e.g. nml-think-v2) put their output in
+       "reasoning": rather than "content":. Fall back if content is empty. */
+    if (i == 0) {
+        char *r = strstr(resp, "\"reasoning\":");
+        if (r) {
+            r += 12;
+            while (*r == ' ') r++;
+            if (*r == '"') {
+                r++;
+                i = 0;
+                while (*r && *r != '"' && i < (int)out_sz - 1) {
+                    if (*r == '\\' && *(r + 1)) r++;
+                    out_buf[i++] = *r++;
+                }
+                out_buf[i] = '\0';
+            }
+        }
+    }
     return i;
+}
+
+static int llm_complete(const char *prompt, char *out_buf, size_t out_sz)
+{
+    return llm_curl(g_llm_host, g_llm_port, g_llm_path,
+                    g_llm_api_key, g_llm_model,
+                    g_llm_provider, prompt, 256, out_buf, out_sz);
+}
+
+static int think_complete(const char *prompt, char *out_buf, size_t out_sz)
+{
+    /* Think model is always local (OpenAI-compatible mlx_lm server).
+       Falls back to external LLM if no think host is configured. */
+    const char *host  = g_think_host[0] ? g_think_host : g_llm_host;
+    uint16_t    port  = g_think_host[0] ? g_think_port  : g_llm_port;
+    const char *path  = g_think_host[0] ? g_think_path  : g_llm_path;
+    const char *model = g_think_model[0] ? g_think_model : g_llm_model;
+    const char *prov  = g_think_host[0] ? "openai" : g_llm_provider;
+    return llm_curl(host, port, path,
+                    g_llm_api_key, model,
+                    prov, prompt, 512, out_buf, out_sz);
+}
+
+/* Local NML code model — writes the spec given enriched context.
+   Always OpenAI-compatible (mlx_lm server). */
+static int code_complete(const char *prompt, char *out_buf, size_t out_sz)
+{
+    return llm_curl(g_code_host, g_code_port, g_code_path,
+                    NULL, g_code_model, "openai",
+                    prompt, 256, out_buf, out_sz);
+}
+
+/*
+ * Append one JSON line to the assessment log file (if configured).
+ * Format: {"ts":N,"phash":"...","weighted_mean":F,"confidence":F,"votes":N}
+ */
+static void append_assessment_log(const OracleSession *s)
+{
+    if (g_log_file[0] == '\0') return;
+    FILE *f = fopen(g_log_file, "a");
+    if (!f) return;
+    fprintf(f,
+        "{\"ts\":%ld,\"phash\":\"%s\","
+        "\"raw_mean\":%.4f,\"weighted_mean\":%.4f,"
+        "\"confidence\":%.4f,\"votes\":%d}\n",
+        (long)time(NULL), s->phash,
+        s->raw_mean, s->weighted_mean,
+        s->confidence, s->count);
+    fclose(f);
 }
 
 /*
  * Generate a program specification and publish to nml/spec.
- * Uses LLM if configured, otherwise falls back to a template.
+ * Uses two-stage Think→Code pipeline if both LLM hosts are configured,
+ * falls back to Code-only or template otherwise.
  */
 static void maybe_publish_spec(void)
 {
@@ -420,24 +565,84 @@ static void maybe_publish_spec(void)
     if (assessed == 0) return;
     avg_confidence /= (float)assessed;
 
+    /* Build rich per-agent context (safe for embedding in LLM prompts) */
+    char agent_ctx[512] = {0};
+    int ctx_pos = 0;
+    for (int i = 0; i < g_stats.count && ctx_pos < (int)sizeof(agent_ctx) - 48; i++) {
+        const AgentStat *st = &g_stats.entries[i];
+        float out_rate = (st->vote_count > 0)
+                         ? (float)st->outlier_count / (float)st->vote_count
+                         : 0.0f;
+        ctx_pos += snprintf(agent_ctx + ctx_pos,
+                            sizeof(agent_ctx) - (size_t)ctx_pos,
+                            "%s:conf=%.2f,out=%.0f%%; ",
+                            st->name, st->confidence, out_rate * 100.0f);
+    }
+
     char spec[1024];
     int  spec_len = 0;
-    int  used_llm = 0;
+    int  used_llm   = 0;
+    int  used_think = 0;
 
-    if (g_llm_host[0] != '\0') {
-        char prompt[512];
-        snprintf(prompt, sizeof(prompt),
-            "The NML collective has %d active agents and %d assessed programs "
-            "with average confidence %.2f. "
-            "Suggest a concise NML program spec (1-2 sentences) that probes "
-            "collective health.",
-            g_peers.count, assessed, avg_confidence);
+    if (g_llm_host[0] != '\0' || g_code_host[0] != '\0') {
+        /* Stage 1 (optional): External cloud model provides deep context */
+        char external_out[512] = {0};
+        if (g_llm_host[0] != '\0' && g_code_host[0] != '\0') {
+            char ext_prompt[768];
+            snprintf(ext_prompt, sizeof(ext_prompt),
+                "NML collective: %d peers, %d programs assessed, "
+                "avg_confidence=%.2f. Per-agent: %s"
+                "What NML program type would best probe collective health?",
+                g_peers.count, assessed, avg_confidence, agent_ctx);
+            llm_complete(ext_prompt, external_out, sizeof(external_out));
+        }
+
+        /* Stage 2 (optional): Internal think model reasons about NML structure */
+        char think_out[640] = {0};
+        if (g_think_host[0] != '\0') {
+            char think_prompt[768];
+            snprintf(think_prompt, sizeof(think_prompt),
+                "NML collective: %d peers, avg_confidence=%.2f. Per-agent: %s"
+                "%s%s"
+                "What type of NML program would best probe collective health?",
+                g_peers.count, avg_confidence, agent_ctx,
+                external_out[0] ? " Analysis: " : "",
+                external_out[0] ? external_out : "");
+            if (think_complete(think_prompt, think_out, sizeof(think_out)) > 0)
+                used_think = 1;
+        }
+
+        /* Stage 3: Code model (or external LLM if code not set) writes the spec */
+        char prompt[1024];
+        const char *reasoning = think_out[0] ? think_out
+                              : external_out[0] ? external_out : NULL;
+        if (reasoning) {
+            snprintf(prompt, sizeof(prompt),
+                "Analysis: %.380s "
+                "Write a concise NML program spec (1-2 sentences) for "
+                "%d agents with avg_confidence %.2f.",
+                reasoning, g_peers.count, avg_confidence);
+        } else {
+            snprintf(prompt, sizeof(prompt),
+                "The NML collective has %d active agents and %d assessed "
+                "programs with average confidence %.2f. Per-agent: %s"
+                "Suggest a concise NML program spec (1-2 sentences) that "
+                "probes collective health.",
+                g_peers.count, assessed, avg_confidence, agent_ctx);
+        }
+
         char content[768];
-        if (llm_complete(prompt, content, sizeof(content)) > 0) {
+        int spec_ok = g_code_host[0] != '\0'
+            ? code_complete(prompt, content, sizeof(content))
+            : llm_complete(prompt, content, sizeof(content));
+        if (spec_ok > 0) {
             spec_len = snprintf(spec, sizeof(spec),
                 "{\"source\":\"llm\",\"assessed\":%d,"
-                 "\"avg_confidence\":%.4f,\"spec\":\"%s\"}",
-                assessed, avg_confidence, content);
+                 "\"avg_confidence\":%.4f,"
+                 "\"think\":%s,\"spec\":\"%s\"}",
+                assessed, avg_confidence,
+                used_think ? "true" : "false",
+                content);
             used_llm = 1;
         }
     }
@@ -455,8 +660,8 @@ static void maybe_publish_spec(void)
                  (const uint8_t *)spec, (size_t)spec_len,
                  MQTT_PUBLISH_QOS_1);
     mqtt_sync(&g_mqtt.client);
-    printf("[oracle] published spec (assessed=%d avg_conf=%.3f llm=%d)\n",
-           assessed, avg_confidence, used_llm);
+    printf("[oracle] published spec (assessed=%d avg_conf=%.3f llm=%d think=%d)\n",
+           assessed, avg_confidence, used_llm, used_think);
 }
 
 /* ── HTTP server ─────────────────────────────────────────────────────── */
@@ -513,8 +718,12 @@ static void handle_http(compat_socket_t cfd)
         char body[512];
         snprintf(body, sizeof(body),
             "{\"status\":\"ok\",\"name\":\"%s\","
-             "\"peers\":%d,\"sessions\":%d,\"agents\":%d}",
-            g_agent_name, g_peers.count, g_oracle.count, g_stats.count);
+             "\"peers\":%d,\"sessions\":%d,\"agents\":%d,"
+             "\"llm\":%s,\"think\":%s,\"log\":%s}",
+            g_agent_name, g_peers.count, g_oracle.count, g_stats.count,
+            g_llm_host[0]   ? "true" : "false",
+            g_think_host[0] ? "true" : "false",
+            g_log_file[0]   ? "true" : "false");
         http_send(cfd, 200, body);
         compat_close_socket(cfd); return;
     }
@@ -648,7 +857,11 @@ static void print_usage(const char *prog)
     fprintf(stderr,
         "Usage: %s [--name NAME] [--broker HOST] [--broker-port PORT]\n"
         "          [--port HTTP_PORT] [--quorum N]\n"
-        "          [--llm-host HOST] [--llm-port PORT] [--llm-path PATH]\n",
+        "          [--llm-host HOST] [--llm-port PORT] [--llm-path PATH]\n"
+        "          [--llm-api-key KEY] [--llm-model MODEL]\n"
+        "          [--think-host HOST] [--think-port PORT] [--think-path PATH]\n"
+        "          [--think-model MODEL]\n"
+        "          [--log-file PATH]\n",
         prog);
 }
 
@@ -674,6 +887,30 @@ int main(int argc, char *argv[])
             g_llm_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--llm-path") == 0 && i + 1 < argc)
             strncpy(g_llm_path, argv[++i], sizeof(g_llm_path) - 1);
+        else if (strcmp(argv[i], "--think-host") == 0 && i + 1 < argc)
+            strncpy(g_think_host, argv[++i], sizeof(g_think_host) - 1);
+        else if (strcmp(argv[i], "--think-port") == 0 && i + 1 < argc)
+            g_think_port = (uint16_t)atoi(argv[++i]);
+        else if (strcmp(argv[i], "--think-path") == 0 && i + 1 < argc)
+            strncpy(g_think_path, argv[++i], sizeof(g_think_path) - 1);
+        else if (strcmp(argv[i], "--think-model") == 0 && i + 1 < argc)
+            strncpy(g_think_model, argv[++i], sizeof(g_think_model) - 1);
+        else if (strcmp(argv[i], "--llm-api-key") == 0 && i + 1 < argc)
+            strncpy(g_llm_api_key, argv[++i], sizeof(g_llm_api_key) - 1);
+        else if (strcmp(argv[i], "--llm-model") == 0 && i + 1 < argc)
+            strncpy(g_llm_model, argv[++i], sizeof(g_llm_model) - 1);
+        else if (strcmp(argv[i], "--llm-provider") == 0 && i + 1 < argc)
+            strncpy(g_llm_provider, argv[++i], sizeof(g_llm_provider) - 1);
+        else if (strcmp(argv[i], "--code-host") == 0 && i + 1 < argc)
+            strncpy(g_code_host, argv[++i], sizeof(g_code_host) - 1);
+        else if (strcmp(argv[i], "--code-port") == 0 && i + 1 < argc)
+            g_code_port = (uint16_t)atoi(argv[++i]);
+        else if (strcmp(argv[i], "--code-path") == 0 && i + 1 < argc)
+            strncpy(g_code_path, argv[++i], sizeof(g_code_path) - 1);
+        else if (strcmp(argv[i], "--code-model") == 0 && i + 1 < argc)
+            strncpy(g_code_model, argv[++i], sizeof(g_code_model) - 1);
+        else if (strcmp(argv[i], "--log-file") == 0 && i + 1 < argc)
+            strncpy(g_log_file, argv[++i], sizeof(g_log_file) - 1);
         else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]); return 0;
         }
@@ -714,9 +951,11 @@ int main(int argc, char *argv[])
         return 1;
     }
     printf("[oracle] HTTP API on port %u\n", g_http_port);
-    printf("[oracle] quorum=%d  broker=%s:%u%s\n",
+    printf("[oracle] quorum=%d  broker=%s:%u%s%s%s\n",
            g_quorum, g_broker_host, g_broker_port,
-           g_llm_host[0] ? "  llm=enabled" : "");
+           g_llm_host[0]   ? "  llm=enabled"   : "",
+           g_think_host[0] ? "  think=enabled" : "",
+           g_log_file[0]   ? "  log=enabled"   : "");
 
     /* ── Main loop ── */
     time_t last_heartbeat = 0;
@@ -759,8 +998,11 @@ int main(int argc, char *argv[])
                         sender_ip[0] ? sender_ip : NULL,
                         pport, NULL, now);
 
-            if (type == MSG_RESULT)
+            if (type == MSG_RESULT || type == MSG_VOTE)
                 handle_result(pname, payload);
+            /* MSG_VOTE uses the same phash:score payload as MSG_RESULT —
+             * governance votes from sentient/enforcer/architect feed into
+             * the same weighted z-score pipeline as worker execution results. */
             /* ANNOUNCE and HEARTBEAT: peer_upsert above is sufficient */
         }
 

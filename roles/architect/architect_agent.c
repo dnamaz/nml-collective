@@ -35,6 +35,7 @@
 #include <string.h>
 #include <time.h>
 #include <stdint.h>
+#include <unistd.h>
 
 /* ── Constants ───────────────────────────────────────────────────────── */
 
@@ -56,6 +57,8 @@ typedef struct {
     int  template_id;       /* -1 if LLM-generated */
     time_t generated_at;
     int  validated;         /* 1 if dry-run passed */
+    char data_keys[TEMPLATE_MAX_DATA_KEYS][32];
+    int  n_data_keys;
 } CatalogEntry;
 
 typedef struct {
@@ -83,13 +86,30 @@ static char g_broker_host[128]  = "127.0.0.1";
 static uint16_t g_broker_port   = 1883;
 static uint16_t g_http_port     = 9003;
 static char g_llm_host[128]     = {0};
-static uint16_t g_llm_port      = 8080;
-static char g_llm_path[256]     = "/v1/chat/completions";
+static uint16_t g_llm_port      = 443;
+static char g_llm_path[256]     = "/api/v1/chat/completions";
+static char g_llm_api_key[256]  = {0};
+static char g_llm_model[128]    = "openai/gpt-4o-mini";
+static char g_llm_provider[32]  = "openai";  /* "openai" or "anthropic" */
+
+static char g_think_host[128]   = {0};
+static uint16_t g_think_port    = 443;
+static char g_think_path[256]   = "/api/v1/chat/completions";
+static char g_think_model[128]  = {0};
+
+/* Code model — local NML code generation (nml-v09-merged-6bit).
+   When set, takes over stage 2 (NML code output) from --llm-*,
+   which becomes an optional stage 0 context provider. */
+static char g_code_host[128]    = {0};
+static uint16_t g_code_port     = 8080;
+static char g_code_path[256]    = "/v1/chat/completions";
+static char g_code_model[128]   = {0};
 
 /* ── Catalog helpers ─────────────────────────────────────────────────── */
 
 static void catalog_add(const char *phash, const char *spec,
-                        int prov, int template_id, int validated)
+                        int prov, int template_id, int validated,
+                        const char data_keys[][32], int n_data_keys)
 {
     CatalogEntry *e;
     if (g_catalog.count < MAX_CATALOG_ENTRIES) {
@@ -105,6 +125,9 @@ static void catalog_add(const char *phash, const char *spec,
     e->template_id  = template_id;
     e->generated_at = time(NULL);
     e->validated    = validated;
+    e->n_data_keys  = n_data_keys < TEMPLATE_MAX_DATA_KEYS ? n_data_keys : TEMPLATE_MAX_DATA_KEYS;
+    for (int i = 0; i < e->n_data_keys; i++)
+        strncpy(e->data_keys[i], data_keys[i], sizeof(e->data_keys[0]) - 1);
 }
 
 /* ── Simple JSON field extractor ─────────────────────────────────────── */
@@ -137,62 +160,136 @@ static int json_str(const char *json, const char *key,
  * Writes compact (pilcrow-delimited) NML to out_buf.
  * Returns chars written, or -1 on failure.
  */
-static int llm_generate(const char *spec, char *out_buf, size_t out_sz)
+
+static void json_escape(const char *in, char *out, size_t out_sz)
 {
-    if (g_llm_host[0] == '\0') return -1;
+    size_t j = 0;
+    for (size_t i = 0; in[i] && j + 2 < out_sz; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if      (c == '"')  { out[j++] = '\\'; out[j++] = '"'; }
+        else if (c == '\\') { out[j++] = '\\'; out[j++] = '\\'; }
+        else if (c == '\n') { out[j++] = '\\'; out[j++] = 'n'; }
+        else if (c == '\r') { out[j++] = '\\'; out[j++] = 'r'; }
+        else if (c == '\t') { out[j++] = '\\'; out[j++] = 't'; }
+        else                { out[j++] = c; }
+    }
+    out[j] = '\0';
+}
 
-    char req_body[2048];
-    int body_len = snprintf(req_body, sizeof(req_body),
-        "{\"model\":\"local\","
-         "\"messages\":["
-           "{\"role\":\"system\","
-            "\"content\":\"Generate a minimal NML program for the given spec. "
-            "Output only the program lines joined with the pilcrow character "
-            "(\\u00b6), no explanation.\"},"
-           "{\"role\":\"user\","
-            "\"content\":\"%s\"}"
-         "],"
-         "\"max_tokens\":512}",
-        spec);
+/*
+ * POST to an LLM endpoint via curl.
+ * provider: "openai" (OpenAI-compatible: OpenRouter, local mlx_lm)
+ *           "anthropic" (api.anthropic.com /v1/messages)
+ * system_msg may be NULL for user-only requests.
+ * Returns chars written to out_buf, or -1 on failure.
+ */
+static int llm_curl(const char *host, uint16_t port, const char *path,
+                    const char *api_key, const char *model,
+                    const char *provider,
+                    const char *system_msg, const char *user_msg,
+                    int max_tokens, char *out_buf, size_t out_sz)
+{
+    if (!host || host[0] == '\0') return -1;
+    int is_anthropic = provider && strcmp(provider, "anthropic") == 0;
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_port        = htons(g_llm_port);
-    addr.sin_addr.s_addr = inet_addr(g_llm_host);
+    char esc_sys[1024] = {0}, esc_usr[2048];
+    if (system_msg) json_escape(system_msg, esc_sys, sizeof(esc_sys));
+    json_escape(user_msg, esc_usr, sizeof(esc_usr));
 
-    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd == COMPAT_INVALID_SOCKET) return -1;
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        compat_close_socket(fd); return -1;
+    char body[4096];
+    if (system_msg && system_msg[0]) {
+        if (is_anthropic) {
+            /* Anthropic: system goes as top-level field */
+            snprintf(body, sizeof(body),
+                "{\"model\":\"%s\",\"max_tokens\":%d,"
+                 "\"system\":\"%s\","
+                 "\"messages\":[{\"role\":\"user\",\"content\":\"%s\"}]}",
+                model, max_tokens, esc_sys, esc_usr);
+        } else {
+            snprintf(body, sizeof(body),
+                "{\"model\":\"%s\","
+                 "\"messages\":["
+                   "{\"role\":\"system\",\"content\":\"%s\"},"
+                   "{\"role\":\"user\",\"content\":\"%s\"}"
+                 "],"
+                 "\"max_tokens\":%d}",
+                model, esc_sys, esc_usr, max_tokens);
+        }
+    } else {
+        snprintf(body, sizeof(body),
+            "{\"model\":\"%s\","
+             "\"messages\":[{\"role\":\"user\",\"content\":\"%s\"}],"
+             "\"max_tokens\":%d}",
+            model, esc_usr, max_tokens);
     }
 
-    char http_req[4096];
-    int req_len = snprintf(http_req, sizeof(http_req),
-        "POST %s HTTP/1.1\r\n"
-        "Host: %s:%u\r\n"
-        "Content-Type: application/json\r\n"
-        "Content-Length: %d\r\n"
-        "Connection: close\r\n\r\n%s",
-        g_llm_path, g_llm_host, g_llm_port, body_len, req_body);
-    send(fd, http_req, (size_t)req_len, 0);
+    char tmppath[64] = "/tmp/nml_llm_XXXXXX";
+    int tmpfd = mkstemp(tmppath);
+    if (tmpfd < 0) return -1;
+    write(tmpfd, body, strlen(body));
+    close(tmpfd);
+
+    const char *scheme = (port == 443) ? "https" : "http";
+    char port_part[16] = "";
+    if (!((port == 443 && strcmp(scheme, "https") == 0) ||
+          (port == 80  && strcmp(scheme, "http")  == 0)))
+        snprintf(port_part, sizeof(port_part), ":%u", port);
+
+    char cmd[1280];
+    if (is_anthropic && api_key && api_key[0]) {
+        snprintf(cmd, sizeof(cmd),
+            "curl -s --max-time 30 -X POST '%s://%s%s%s' "
+            "-H 'x-api-key: %s' "
+            "-H 'anthropic-version: 2023-06-01' "
+            "-H 'Content-Type: application/json' "
+            "-d '@%s' 2>/dev/null",
+            scheme, host, port_part, path, api_key, tmppath);
+    } else if (api_key && api_key[0]) {
+        snprintf(cmd, sizeof(cmd),
+            "curl -s --max-time 30 -X POST '%s://%s%s%s' "
+            "-H 'Authorization: Bearer %s' "
+            "-H 'Content-Type: application/json' "
+            "-d '@%s' 2>/dev/null",
+            scheme, host, port_part, path, api_key, tmppath);
+    } else {
+        snprintf(cmd, sizeof(cmd),
+            "curl -s --max-time 30 -X POST '%s://%s%s%s' "
+            "-H 'Content-Type: application/json' "
+            "-d '@%s' 2>/dev/null",
+            scheme, host, port_part, path, tmppath);
+    }
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) { unlink(tmppath); return -1; }
 
     char resp[8192];
-    int rn = recv(fd, resp, sizeof(resp) - 1, 0);
-    compat_close_socket(fd);
-    if (rn <= 0) return -1;
-    resp[rn] = '\0';
+    size_t total = 0, n;
+    while ((n = fread(resp + total, 1, sizeof(resp) - 1 - total, fp)) > 0)
+        total += n;
+    resp[total] = '\0';
+    pclose(fp);
+    unlink(tmppath);
 
-    char *body = strstr(resp, "\r\n\r\n");
-    if (!body) return -1;
-    body += 4;
+    if (total == 0) return -1;
 
-    char *p = strstr(body, "\"content\":");
+    /* Parse response: OpenAI returns "content":"<string>",
+       Anthropic returns "content":[{"type":"text","text":"<string>"}] */
+    char *p = strstr(resp, "\"content\":");
     if (!p) return -1;
     p += 10;
     while (*p == ' ') p++;
-    if (*p != '"') return -1;
-    p++;
+    if (*p == '[') {
+        p = strstr(p, "\"text\":");
+        if (!p) return -1;
+        p += 7;
+        while (*p == ' ') p++;
+        if (*p != '"') return -1;
+        p++;
+    } else if (*p == '"') {
+        p++;
+    } else {
+        return -1;
+    }
 
     int i = 0;
     while (*p && *p != '"' && i < (int)out_sz - 1) {
@@ -200,7 +297,60 @@ static int llm_generate(const char *spec, char *out_buf, size_t out_sz)
         out_buf[i++] = *p++;
     }
     out_buf[i] = '\0';
+
+    /* Thinking/reasoning models put output in "reasoning": not "content":. */
+    if (i == 0) {
+        char *r = strstr(resp, "\"reasoning\":");
+        if (r) {
+            r += 12;
+            while (*r == ' ') r++;
+            if (*r == '"') {
+                r++;
+                i = 0;
+                while (*r && *r != '"' && i < (int)out_sz - 1) {
+                    if (*r == '\\' && *(r + 1)) r++;
+                    out_buf[i++] = *r++;
+                }
+                out_buf[i] = '\0';
+            }
+        }
+    }
     return i;
+}
+
+static int llm_generate(const char *spec, char *out_buf, size_t out_sz)
+{
+    return llm_curl(g_llm_host, g_llm_port, g_llm_path,
+                    g_llm_api_key, g_llm_model, g_llm_provider,
+                    "Generate a minimal NML program for the given spec. "
+                    "Output only the program lines joined with the pilcrow character "
+                    "(\xc2\xb6), no explanation.",
+                    spec, 512, out_buf, out_sz);
+}
+
+/* Local NML code model — generates exact NML given an enriched spec.
+   Always OpenAI-compatible (mlx_lm server). */
+static int code_generate(const char *spec, char *out_buf, size_t out_sz)
+{
+    return llm_curl(g_code_host, g_code_port, g_code_path,
+                    NULL, g_code_model, "openai",
+                    "Generate a minimal NML program. "
+                    "Output only program lines joined with pilcrow (\xc2\xb6), no explanation.",
+                    spec, 512, out_buf, out_sz);
+}
+
+static int think_complete(const char *prompt, char *out_buf, size_t out_sz)
+{
+    /* Think model is always local (OpenAI-compatible mlx_lm server).
+       Falls back to external LLM if no think host is configured. */
+    const char *host  = g_think_host[0] ? g_think_host : g_llm_host;
+    uint16_t    port  = g_think_host[0] ? g_think_port  : g_llm_port;
+    const char *path  = g_think_host[0] ? g_think_path  : g_llm_path;
+    const char *model = g_think_model[0] ? g_think_model : g_llm_model;
+    const char *prov  = g_think_host[0] ? "openai" : g_llm_provider;
+    return llm_curl(host, port, path,
+                    g_llm_api_key, model, prov,
+                    NULL, prompt, 512, out_buf, out_sz);
 }
 
 /* ── Template generation ─────────────────────────────────────────────── */
@@ -209,20 +359,25 @@ static void fill_default_params(TemplateParams *p, int template_id)
 {
     memset(p, 0, sizeof(*p));
     p->template_id    = template_id;
-    p->input_dim      = 8;
-    p->n_hidden       = 2;
-    p->hidden_dims[0] = 16;
-    p->hidden_dims[1] = 8;
+    /* Match the demo data layout: 6 features, 1 hidden layer (6→8→1).
+     * Data files provide @w1/@b1/@w2/@b2 as initial weights,
+     * @training_data/@training_labels for TNET, @new_transaction for inference. */
+    p->input_dim      = 6;
+    p->n_hidden       = 1;
+    p->hidden_dims[0] = 8;
     p->threshold      = 0.5f;
-    p->output_classes = 3;
+    p->output_classes = 2;
     p->epochs         = 100;
     p->lr_scaled      = 100;    /* 0.01 */
-    strncpy(p->output_key, "score", sizeof(p->output_key) - 1);
+    p->training_mode  = 1;      /* train on local data, then infer */
+    strncpy(p->input_key,  "new_transaction", sizeof(p->input_key)  - 1);
+    strncpy(p->output_key, "fraud_score",     sizeof(p->output_key) - 1);
 }
 
 static int generate_from_template(const char *intent,
                                   char *compact_out, size_t out_sz,
-                                  int *template_id_out)
+                                  int *template_id_out,
+                                  TemplateParams *params_out)
 {
     int tid = template_select(intent);
     if (tid < 0) return -1;
@@ -234,6 +389,7 @@ static int generate_from_template(const char *intent,
     if (n <= 0) return -1;
 
     *template_id_out = tid;
+    if (params_out) *params_out = params;
     return n;
 }
 
@@ -249,13 +405,26 @@ static int validate_compact(const char *compact)
     if (msg_compact_to_program(compact, program_text, sizeof(program_text)) < 0)
         return 0;
 
-    char score_buf[32];
-    int rc = nml_exec_run(program_text, NULL, score_buf, sizeof(score_buf));
-    /* -1 = assembly/exec error; -2 = no score key (OK for validation) */
-    return (rc != -1) ? 1 : 0;
+    /* Assembly-only validation: do NOT call vm_execute here.
+     * Generated programs reference named-memory tensors (weights, input data)
+     * that are only available at worker runtime — executing without them
+     * segfaults on the first tensor operation (MMUL, MADD, etc.). */
+    return nml_exec_validate(program_text);
 }
 
 /* ── Program submission ──────────────────────────────────────────────── */
+
+/* Publish a governance vote for phash (MSG_VOTE). */
+static void publish_vote(const char *phash, float score)
+{
+    char payload[32];
+    snprintf(payload, sizeof(payload), "%s:%.6f", phash, score);
+    uint8_t pkt[256];
+    int n = msg_encode(pkt, sizeof(pkt), MSG_VOTE,
+                       g_agent_name, g_http_port, payload);
+    if (n > 0)
+        mqtt_transport_publish(&g_mqtt, MSG_VOTE, pkt, (size_t)n);
+}
 
 /*
  * Encode compact NML as MSG_PROGRAM and publish to nml/program.
@@ -305,20 +474,71 @@ static void handle_spec(const char *sender, const char *payload)
     int  template_id = -1;
     int  provenance  = PROV_TEMPLATE;
     int  generated   = 0;
+    TemplateParams last_params;
+    memset(&last_params, 0, sizeof(last_params));
 
     /* Primary path: template engine */
     if (generate_from_template(intent, compact, sizeof(compact),
-                               &template_id) > 0) {
+                               &template_id, &last_params) > 0) {
         generated = 1;
-        printf("[architect] template match: %s\n", template_name(template_id));
+        printf("[architect] template match: %s  mode=%s\n",
+               template_name(template_id),
+               last_params.training_mode ? "train+infer" : "infer");
     }
 
-    /* Fallback: LLM */
-    if (!generated && g_llm_host[0] != '\0') {
-        if (llm_generate(intent, compact, sizeof(compact)) > 0) {
+    /* Fallback: three-stage pipeline (external → think → code) */
+    if (!generated && (g_llm_host[0] != '\0' || g_code_host[0] != '\0')) {
+        char context[512] = {0};
+
+        /* Stage 1 (optional): External cloud model provides deep context */
+        if (g_llm_host[0] != '\0' && g_code_host[0] != '\0') {
+            char ext_prompt[768];
+            snprintf(ext_prompt, sizeof(ext_prompt),
+                "NML program intent: %.400s "
+                "Provide concise context about data types and operations needed.",
+                intent);
+            llm_generate(ext_prompt, context, sizeof(context));
+        }
+
+        /* Stage 2 (optional): Internal think model decomposes into NML structure */
+        char think_out[512] = {0};
+        char enriched[NML_MAX_PROGRAM_LEN + 1];
+        if (g_think_host[0] != '\0') {
+            char think_prompt[768];
+            snprintf(think_prompt, sizeof(think_prompt),
+                "NML intent: %.250s%s%s"
+                "Break down the required NML operations in one paragraph.",
+                intent,
+                context[0] ? " Context: " : "",
+                context[0] ? context : "");
+            think_complete(think_prompt, think_out, sizeof(think_out));
+        }
+        if (think_out[0]) {
+            snprintf(enriched, sizeof(enriched),
+                "Requirements: %.300s Original intent: %.150s",
+                think_out, intent);
+        } else if (context[0]) {
+            snprintf(enriched, sizeof(enriched),
+                "Context: %.300s Intent: %.200s", context, intent);
+        } else {
+            strncpy(enriched, intent, sizeof(enriched) - 1);
+            enriched[sizeof(enriched) - 1] = '\0';
+        }
+
+        /* Stage 3: Code model generates NML (local if set, else external) */
+        int ok = g_code_host[0] != '\0'
+            ? code_generate(enriched, compact, sizeof(compact))
+            : llm_generate(enriched, compact, sizeof(compact));
+
+        if (ok > 0) {
             generated  = 1;
             provenance = PROV_LLM;
-            printf("[architect] LLM generated program\n");
+            const char *stages = (g_code_host[0] && g_think_host[0] && g_llm_host[0])
+                ? "external+think+code"
+                : (g_code_host[0] && g_think_host[0]) ? "think+code"
+                : (g_code_host[0]) ? "code-only"
+                : (think_out[0]) ? "think+llm" : "llm-only";
+            printf("[architect] generated program (%s)\n", stages);
         }
     }
 
@@ -342,9 +562,16 @@ static void handle_spec(const char *sender, const char *payload)
         return;
     }
 
-    catalog_add(phash, intent, provenance, template_id, valid);
+    catalog_add(phash, intent, provenance, template_id, valid,
+                last_params.data_keys, last_params.n_data_keys);
     printf("[architect] submitted program phash=%.16s  prov=%s  valid=%d\n",
            phash, provenance == PROV_TEMPLATE ? "template" : "llm", valid);
+
+    /* Governance vote: confidence based on generation provenance + validation.
+     * template=1.0 (deterministic), llm+valid=0.9, llm+unvalidated=0.6 */
+    float vote_score = (provenance == PROV_TEMPLATE) ? 1.0f
+                     : (valid ? 0.9f : 0.6f);
+    publish_vote(phash, vote_score);
 }
 
 /* ── HTTP server ─────────────────────────────────────────────────────── */
@@ -403,9 +630,11 @@ static void handle_http(compat_socket_t cfd)
         snprintf(body, sizeof(body),
             "{\"status\":\"ok\",\"name\":\"%s\","
              "\"peers\":%d,\"catalog\":%d,"
-             "\"templates\":%d,\"llm\":%s}",
+             "\"templates\":%d,\"llm\":%s,\"think\":%s}",
             g_agent_name, g_peers.count, g_catalog.count,
-            TEMPLATE_COUNT, g_llm_host[0] ? "true" : "false");
+            TEMPLATE_COUNT,
+            g_llm_host[0]   ? "true" : "false",
+            g_think_host[0] ? "true" : "false");
         http_send(cfd, 200, body);
         compat_close_socket(cfd); return;
     }
@@ -417,17 +646,26 @@ static void handle_http(compat_socket_t cfd)
         for (int i = 0; i < g_catalog.count; i++) {
             const CatalogEntry *e = &g_catalog.entries[i];
             if (i > 0) pos += snprintf(body + pos, sizeof(body) - (size_t)pos, ",");
+            int kstart = pos;
             pos += snprintf(body + pos, sizeof(body) - (size_t)pos,
                 "{\"phash\":\"%s\","
                  "\"spec\":\"%.80s\","
                  "\"provenance\":\"%s\","
                  "\"template\":\"%s\","
-                 "\"validated\":%s}",
+                 "\"validated\":%s,"
+                 "\"data_keys\":[",
                 e->phash,
                 e->spec,
                 e->provenance == PROV_TEMPLATE ? "template" : "llm",
                 e->template_id >= 0 ? template_name(e->template_id) : "n/a",
                 e->validated ? "true" : "false");
+            (void)kstart;
+            for (int k = 0; k < e->n_data_keys; k++) {
+                if (k > 0) pos += snprintf(body + pos, sizeof(body) - (size_t)pos, ",");
+                pos += snprintf(body + pos, sizeof(body) - (size_t)pos,
+                                "\"%s\"", e->data_keys[k]);
+            }
+            pos += snprintf(body + pos, sizeof(body) - (size_t)pos, "]}");
         }
         snprintf(body + pos, sizeof(body) - (size_t)pos, "]");
         http_send(cfd, 200, body);
@@ -464,8 +702,39 @@ static void handle_http(compat_socket_t cfd)
             http_send(cfd, 400, "{\"error\":\"spec required\"}");
             compat_close_socket(cfd); return;
         }
+        int cat_before = g_catalog.count;
         handle_spec("http", spec);
-        http_send(cfd, 200, "{\"ok\":true}");
+        /* Return details from the catalog entry just added */
+        char resp[512];
+        if (g_catalog.count > cat_before || g_catalog.count == MAX_CATALOG_ENTRIES) {
+            int idx = (g_catalog.count < MAX_CATALOG_ENTRIES)
+                      ? g_catalog.count - 1
+                      : (g_catalog.next - 1 + MAX_CATALOG_ENTRIES) % MAX_CATALOG_ENTRIES;
+            CatalogEntry *e = &g_catalog.entries[idx];
+            /* Build data_keys array string */
+            char dkeys[256] = "[";
+            int dpos = 1;
+            for (int k = 0; k < e->n_data_keys; k++) {
+                if (k > 0) dpos += snprintf(dkeys + dpos, sizeof(dkeys) - (size_t)dpos, ",");
+                dpos += snprintf(dkeys + dpos, sizeof(dkeys) - (size_t)dpos,
+                                 "\"%s\"", e->data_keys[k]);
+            }
+            snprintf(dkeys + dpos, sizeof(dkeys) - (size_t)dpos, "]");
+
+            snprintf(resp, sizeof(resp),
+                "{\"ok\":true,\"hash\":\"%s\",\"provenance\":\"%s\","
+                 "\"template_id\":%d,\"validated\":%s,\"spec\":\"%s\","
+                 "\"data_keys\":%s}",
+                e->phash,
+                e->template_id >= 0 ? "template" : "llm",
+                e->template_id,
+                e->validated ? "true" : "false",
+                e->spec,
+                dkeys);
+        } else {
+            snprintf(resp, sizeof(resp), "{\"ok\":false,\"error\":\"generation failed\"}");
+        }
+        http_send(cfd, 200, resp);
         compat_close_socket(cfd); return;
     }
 
@@ -493,7 +762,10 @@ static void print_usage(const char *prog)
     fprintf(stderr,
         "Usage: %s [--name NAME] [--broker HOST] [--broker-port PORT]\n"
         "          [--port HTTP_PORT]\n"
-        "          [--llm-host HOST] [--llm-port PORT] [--llm-path PATH]\n",
+        "          [--llm-host HOST] [--llm-port PORT] [--llm-path PATH]\n"
+        "          [--llm-api-key KEY] [--llm-model MODEL]\n"
+        "          [--think-host HOST] [--think-port PORT] [--think-path PATH]\n"
+        "          [--think-model MODEL]\n",
         prog);
 }
 
@@ -517,6 +789,28 @@ int main(int argc, char *argv[])
             g_llm_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--llm-path") == 0 && i + 1 < argc)
             strncpy(g_llm_path, argv[++i], sizeof(g_llm_path) - 1);
+        else if (strcmp(argv[i], "--think-host") == 0 && i + 1 < argc)
+            strncpy(g_think_host, argv[++i], sizeof(g_think_host) - 1);
+        else if (strcmp(argv[i], "--think-port") == 0 && i + 1 < argc)
+            g_think_port = (uint16_t)atoi(argv[++i]);
+        else if (strcmp(argv[i], "--think-path") == 0 && i + 1 < argc)
+            strncpy(g_think_path, argv[++i], sizeof(g_think_path) - 1);
+        else if (strcmp(argv[i], "--think-model") == 0 && i + 1 < argc)
+            strncpy(g_think_model, argv[++i], sizeof(g_think_model) - 1);
+        else if (strcmp(argv[i], "--llm-api-key") == 0 && i + 1 < argc)
+            strncpy(g_llm_api_key, argv[++i], sizeof(g_llm_api_key) - 1);
+        else if (strcmp(argv[i], "--llm-model") == 0 && i + 1 < argc)
+            strncpy(g_llm_model, argv[++i], sizeof(g_llm_model) - 1);
+        else if (strcmp(argv[i], "--llm-provider") == 0 && i + 1 < argc)
+            strncpy(g_llm_provider, argv[++i], sizeof(g_llm_provider) - 1);
+        else if (strcmp(argv[i], "--code-host") == 0 && i + 1 < argc)
+            strncpy(g_code_host, argv[++i], sizeof(g_code_host) - 1);
+        else if (strcmp(argv[i], "--code-port") == 0 && i + 1 < argc)
+            g_code_port = (uint16_t)atoi(argv[++i]);
+        else if (strcmp(argv[i], "--code-path") == 0 && i + 1 < argc)
+            strncpy(g_code_path, argv[++i], sizeof(g_code_path) - 1);
+        else if (strcmp(argv[i], "--code-model") == 0 && i + 1 < argc)
+            strncpy(g_code_model, argv[++i], sizeof(g_code_model) - 1);
         else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]); return 0;
         }
@@ -557,9 +851,10 @@ int main(int argc, char *argv[])
     }
 
     printf("[architect] HTTP API on port %u\n", g_http_port);
-    printf("[architect] templates=%d  broker=%s:%u%s\n",
+    printf("[architect] templates=%d  broker=%s:%u%s%s\n",
            TEMPLATE_COUNT, g_broker_host, g_broker_port,
-           g_llm_host[0] ? "  llm=enabled" : "");
+           g_llm_host[0]   ? "  llm=enabled"   : "",
+           g_think_host[0] ? "  think=enabled" : "");
 
     /* ── Main loop ── */
     time_t last_heartbeat = 0;

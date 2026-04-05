@@ -34,6 +34,9 @@
 /* Maximum supported hidden layers */
 #define TEMPLATE_MAX_HIDDEN 4
 
+/* Maximum number of required data keys a template can declare */
+#define TEMPLATE_MAX_DATA_KEYS 8
+
 /* Template parameters */
 typedef struct {
     int  template_id;
@@ -42,9 +45,14 @@ typedef struct {
     int  n_hidden;
     int  output_classes;                   /* multiclass only */
     float threshold;                       /* binary/anomaly only */
-    char output_key[32];                   /* named memory key */
+    char input_key[32];                    /* named memory key for inference input */
+    char output_key[32];                   /* named memory key for result */
+    int  training_mode;                    /* 1 = train then infer, 0 = infer only */
+    char data_keys[TEMPLATE_MAX_DATA_KEYS][32]; /* required named memory keys (filled by generator) */
+    int  n_data_keys;                      /* number of entries in data_keys[] */
     int  epochs;
     int  lr_scaled;                        /* learning rate × 10000 */
+    int  batch_size;                       /* mini-batch SGD size; 0 = full-batch */
 } TemplateParams;
 
 /*
@@ -56,7 +64,12 @@ typedef struct {
  * The caller should validate the output with nml_exec dry-run
  * before submitting to the Sentient for signing.
  */
-int template_generate(const TemplateParams *params, char *out, size_t out_sz);
+/*
+ * params->data_keys[] and params->n_data_keys are populated as a side-effect —
+ * the caller can read them after the call to know what named memory the
+ * generated program requires.
+ */
+int template_generate(TemplateParams *params, char *out, size_t out_sz);
 
 /*
  * Return the human-readable name for a template ID.

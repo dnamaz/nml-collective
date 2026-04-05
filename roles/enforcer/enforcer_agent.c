@@ -408,21 +408,37 @@ static void check_rate(const char *agent_name, const char *msg_type_str)
 
 /* ── Score outlier detection (called on every MSG_RESULT) ────────────── */
 
-static void check_score_outlier(const char *agent_name, float score,
-                                  const char *phash)
+/* Publish a governance vote for phash (MSG_VOTE). */
+static void publish_vote(const char *phash, float score)
+{
+    char payload[32];
+    snprintf(payload, sizeof(payload), "%s:%.6f", phash, score);
+    uint8_t pkt[256];
+    int n = msg_encode(pkt, sizeof(pkt), MSG_VOTE,
+                       g_agent_name, 0, payload);
+    if (n > 0)
+        mqtt_transport_publish(&g_mqtt, MSG_VOTE, pkt, (size_t)n);
+}
+
+/*
+ * Returns 1 if the score is a statistical outlier for this agent, 0 otherwise.
+ * Caller uses the return value to cast a governance vote.
+ */
+static int check_score_outlier(const char *agent_name, float score,
+                                const char *phash)
 {
     ThreatEntry *e = threat_get_or_create(agent_name);
-    if (!e) return;
+    if (!e) return 0;
 
     e->score_sum    += score;
     e->score_sum_sq += (double)score * score;
     e->score_n++;
 
-    if (e->score_n < SCORE_MIN_SAMPLES) return;
+    if (e->score_n < SCORE_MIN_SAMPLES) return 0;
 
     double mean     = e->score_sum / e->score_n;
     double variance = (e->score_sum_sq / e->score_n) - (mean * mean);
-    if (variance < 1e-9) return;  /* all scores identical, skip */
+    if (variance < 1e-9) return 0;  /* all scores identical, skip */
 
     double stddev = sqrt(variance);
     double z      = fabs(((double)score - mean) / stddev);
@@ -441,7 +457,9 @@ static void check_score_outlier(const char *agent_name, float score,
         } else {
             do_warn(agent_name, detail);
         }
+        return 1;
     }
+    return 0;
 }
 
 /* ── MSG_ENFORCE handler (from another enforcer on the mesh) ─────────── */
@@ -640,8 +658,10 @@ int main(int argc, char **argv)
                     check_rate(peer_name, "result");
                     char phash[17] = {0};
                     float score    = 0.0f;
-                    if (sscanf(payload, "%16[^:]:%f", phash, &score) == 2)
-                        check_score_outlier(peer_name, score, phash);
+                    if (sscanf(payload, "%16[^:]:%f", phash, &score) == 2) {
+                        int outlier = check_score_outlier(peer_name, score, phash);
+                        publish_vote(phash, outlier ? 0.0f : 1.0f);
+                    }
                     break;
                 }
                 case MSG_ENFORCE:
@@ -692,8 +712,10 @@ int main(int argc, char **argv)
                     check_rate(peer_name, "result");
                     char phash[17] = {0};
                     float score    = 0.0f;
-                    if (sscanf(payload, "%16[^:]:%f", phash, &score) == 2)
-                        check_score_outlier(peer_name, score, phash);
+                    if (sscanf(payload, "%16[^:]:%f", phash, &score) == 2) {
+                        int outlier = check_score_outlier(peer_name, score, phash);
+                        publish_vote(phash, outlier ? 0.0f : 1.0f);
+                    }
                     break;
                 }
                 case MSG_ENFORCE:

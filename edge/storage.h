@@ -55,4 +55,12 @@ int storage_exists(const char *dir, const char *hash);
  */
 int storage_content_len(const char *dir, const char *hash);
 
+/*
+ * Return the byte offset from the start of the .obj file to the first byte
+ * of the content payload (immediately after the NebulaDisk header).
+ * Used by range-serving to seek directly to a float sub-range.
+ * Returns >= 0 on success, -1 on error/not found.
+ */
+long storage_content_offset(const char *dir, const char *hash);
+
 #endif /* EDGE_STORAGE_H */

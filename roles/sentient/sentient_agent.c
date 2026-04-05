@@ -26,6 +26,7 @@
 #include "../../edge/mqtt_transport.h"
 #include "../../edge/storage.h"
 #include "../../edge/http_client.h"
+#include "../../edge/nml_exec.h"
 
 /* For direct mqtt_publish on custom topics (nml/committed/<phash>) */
 #include "../../edge/mqtt/mqtt.h"
@@ -178,10 +179,23 @@ static void http_respond(compat_socket_t fd, int status, const char *body)
 
 /* ── Core collective functions ───────────────────────────────────────── */
 
+/* Publish a governance vote for phash to nml/# (MSG_VOTE). */
+static void publish_vote(const char *phash, float score)
+{
+    char payload[32];
+    snprintf(payload, sizeof(payload), "%s:%.6f", phash, score);
+    uint8_t pkt[256];
+    int n = msg_encode(pkt, sizeof(pkt), MSG_VOTE,
+                       g_agent_name, g_http_port, payload);
+    if (n > 0)
+        mqtt_transport_publish(&g_mqtt, MSG_VOTE, pkt, (size_t)n);
+}
+
 static int sign_and_broadcast(const char *program_text)
 {
     static char signed_buf[NML_MAX_PROGRAM_LEN + 512];
     const char *source = program_text;
+    int did_sign = 0;
 
     if (g_key_hex[0]) {
         const char *key_agent = g_key_agent[0] ? g_key_agent : g_agent_name;
@@ -192,6 +206,7 @@ static int sign_and_broadcast(const char *program_text)
             return -1;
         }
         source = signed_buf;
+        did_sign = 1;
     } else {
         fprintf(stderr, "[%s] WARNING: broadcasting unsigned program (no key)\n",
                 g_agent_name);
@@ -214,7 +229,12 @@ static int sign_and_broadcast(const char *program_text)
     printf("[%s] broadcasting %s (signed=%s)\n",
            g_agent_name, phash, g_key_hex[0] ? "yes" : "no");
 
-    return mqtt_transport_publish(&g_mqtt, MSG_PROGRAM, wire, (size_t)n);
+    int rc = mqtt_transport_publish(&g_mqtt, MSG_PROGRAM, wire, (size_t)n);
+
+    /* Governance vote: 1.0 if we signed it, 0.8 if unsigned (no key configured) */
+    publish_vote(phash, did_sign ? 1.0f : 0.8f);
+
+    return rc;
 }
 
 static void commit_result(const char *phash, float score, int vote_count)
@@ -236,6 +256,18 @@ static void commit_result(const char *phash, float score, int vote_count)
            g_agent_name, phash, score, vote_count);
 }
 
+/* NML program used to finalize consensus via VOTE median (strategy #0).
+ * Median is robust to a single outlier worker; mean is not.
+ * Output key "result" is recognized by nml_exec_run()'s score key priority. */
+static const char *CONSENSUS_PROGRAM =
+    "META  @purpose  \"consensus finalizer\"\n"
+    "META  @input    agent_scores  float\n"
+    "META  @output   result        float\n"
+    "LD    R0 @agent_scores\n"
+    "VOTE  RA R0 #0\n"
+    "ST    RA @result\n"
+    "HALT\n";
+
 static void handle_result(const char *peer_name, const char *payload)
 {
     char phash[17] = {0};
@@ -243,11 +275,34 @@ static void handle_result(const char *peer_name, const char *payload)
     if (sscanf(payload, "%16[^:]:%f", phash, &score) != 2) return;
 
     int r = vote_add(&g_votes, phash, peer_name, score, g_quorum, time(NULL));
-    if (r == 1) {
+    if (r != 1) return;
+
+    /* Quorum reached — collect raw scores and run NML consensus program. */
+    float raw[VOTE_MAX_VOTERS];
+    int n = vote_get_scores(&g_votes, phash, raw, VOTE_MAX_VOTERS);
+    if (n <= 0) return;
+
+    /* Build .nml.data string: @agent_scores shape=N dtype=f32 data=s1,s2,... */
+    char data_buf[VOTE_MAX_VOTERS * 16 + 64];
+    int  pos = snprintf(data_buf, sizeof(data_buf),
+                        "@agent_scores shape=%d dtype=f32 data=", n);
+    for (int i = 0; i < n && pos < (int)sizeof(data_buf) - 16; i++) {
+        pos += snprintf(data_buf + pos, sizeof(data_buf) - (size_t)pos,
+                        i == 0 ? "%.6f" : ",%.6f", (double)raw[i]);
+    }
+
+    char score_out[32];
+    float result;
+    if (nml_exec_run(CONSENSUS_PROGRAM, data_buf, score_out, sizeof(score_out)) == 0
+            && sscanf(score_out, "%f", &result) == 1) {
+        commit_result(phash, result, n);
+    } else {
+        /* NML execution failed — fall back to C mean. */
+        printf("[%s] consensus NML failed for %s, falling back to mean\n",
+               g_agent_name, phash);
         float mean;
-        if (vote_get_result(&g_votes, phash, &mean) == 0) {
-            commit_result(phash, mean, g_quorum);
-        }
+        if (vote_get_result(&g_votes, phash, &mean) == 0)
+            commit_result(phash, mean, n);
     }
 }
 
@@ -442,9 +497,62 @@ static void handle_data_approve(compat_socket_t fd, const char *body)
                  "%s", hash);
     }
 
+    /* Broadcast approval over MQTT so custodian updates its state */
+    char mqtt_body[128];
+    int mlen = snprintf(mqtt_body, sizeof(mqtt_body),
+                        "{\"hash\":\"%s\",\"status\":\"approved\"}", hash);
+    mqtt_publish(&g_mqtt.client, "nml/data/approve",
+                 (const uint8_t *)mqtt_body, (size_t)mlen,
+                 MQTT_PUBLISH_QOS_1);
+    mqtt_sync(&g_mqtt.client);
+
     char resp[128];
     snprintf(resp, sizeof(resp),
              "{\"hash\":\"%s\",\"status\":\"approved\"}", hash);
+    http_respond(fd, 200, resp);
+}
+
+static void handle_data_reject(compat_socket_t fd, const char *body)
+{
+    char hash[17] = {0};
+    char reason[64] = {0};
+    if (json_str(body, "hash", hash, sizeof(hash)) < 0) {
+        http_respond(fd, 400, "{\"error\":\"hash required\"}");
+        return;
+    }
+    json_str(body, "reason", reason, sizeof(reason));
+
+    int found = -1;
+    for (int i = 0; i < g_quarantine_count; i++) {
+        if (strcmp(g_quarantine[i].hash, hash) == 0) {
+            found = i;
+            break;
+        }
+    }
+
+    if (found < 0) {
+        http_respond(fd, 404, "{\"error\":\"hash not in quarantine\"}");
+        return;
+    }
+
+    g_quarantine[found].status = QUARANTINE_REJECTED;
+
+    /* Broadcast rejection over MQTT so custodian updates its state */
+    char mqtt_body[192];
+    int mlen = snprintf(mqtt_body, sizeof(mqtt_body),
+                        "{\"hash\":\"%s\",\"status\":\"rejected\",\"reason\":\"%s\"}",
+                        hash, reason);
+    mqtt_publish(&g_mqtt.client, "nml/data/reject",
+                 (const uint8_t *)mqtt_body, (size_t)mlen,
+                 MQTT_PUBLISH_QOS_1);
+    mqtt_sync(&g_mqtt.client);
+
+    printf("[%s] rejected data hash=%s reason=%s\n",
+           g_agent_name, hash, reason[0] ? reason : "(none)");
+
+    char resp[192];
+    snprintf(resp, sizeof(resp),
+             "{\"hash\":\"%s\",\"status\":\"rejected\"}", hash);
     http_respond(fd, 200, resp);
 }
 
@@ -647,6 +755,10 @@ static void http_serve_once(compat_socket_t server_fd)
     } else if (strcmp(method, "POST") == 0 &&
                strcmp(path_only, "/data/approve") == 0) {
         handle_data_approve(client_fd, body_ptr);
+
+    } else if (strcmp(method, "POST") == 0 &&
+               strcmp(path_only, "/data/reject") == 0) {
+        handle_data_reject(client_fd, body_ptr);
 
     } else if (strcmp(method, "GET") == 0 &&
                strcmp(path_only, "/data/quarantine") == 0) {

@@ -31,6 +31,19 @@
 #define MSG_ENFORCE   5
 /* Oracle → Architect program specification (type 6 ignored by Python agents) */
 #define MSG_SPEC      6
+/*
+ * Governance vote from any collective node (type 7).
+ * Payload: "{hash16}:{score:.6f}"  — same format as MSG_RESULT.
+ * Voter identity is carried in the wire-format name field.
+ * Oracle feeds these into the same weighted z-score pipeline as MSG_RESULT,
+ * enabling full soft-voting consensus across all roles, not just workers.
+ *
+ * Vote semantics per role:
+ *   sentient  — 1.0 signed / 0.8 unsigned (no key configured)
+ *   enforcer  — 1.0 no outlier / 0.0 outlier detected for this phash
+ *   architect — 1.0 template / 0.9 llm+validated / 0.6 llm+unvalidated
+ */
+#define MSG_VOTE      7
 
 /* Minimum valid packet: magic(4)+type(1)+name_len(1)+port(2) */
 #define MSG_HEADER_MIN 8

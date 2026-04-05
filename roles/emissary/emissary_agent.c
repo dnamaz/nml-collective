@@ -41,6 +41,12 @@
 #include <string.h>
 #include <time.h>
 #include <stdint.h>
+#include <unistd.h>
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#include "../../../nml/runtime/nml_crypto.h"
+#pragma GCC diagnostic pop
 
 /* ── Constants ───────────────────────────────────────────────────────── */
 
@@ -111,6 +117,16 @@ static char g_sentient_host[128]    = "127.0.0.1";
 static uint16_t g_sentient_port     = 9001;
 static char g_oracle_host[128]      = "127.0.0.1";
 static uint16_t g_oracle_port       = 9002;
+
+/* LLM inference endpoints for POST /infer */
+static char g_think_host[128]       = {0};
+static uint16_t g_think_port        = 443;
+static char g_think_model[128]      = {0};
+static char g_code_host[128]        = {0};
+static uint16_t g_code_port         = 443;
+static char g_code_model[128]       = "openai/gpt-4o-mini";
+static char g_llm_path[256]         = "/api/v1/chat/completions";
+static char g_llm_api_key[256]      = {0};
 
 /* ── Rate limiting ───────────────────────────────────────────────────── */
 
@@ -238,6 +254,159 @@ static int internal_http(const char *host, uint16_t port,
     return (int)body_len;
 }
 
+/* ── LLM call helper ─────────────────────────────────────────────────── */
+
+static void json_escape(const char *in, char *out, size_t out_sz)
+{
+    size_t j = 0;
+    for (size_t i = 0; in[i] && j + 2 < out_sz; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if      (c == '"')  { out[j++] = '\\'; out[j++] = '"'; }
+        else if (c == '\\') { out[j++] = '\\'; out[j++] = '\\'; }
+        else if (c == '\n') { out[j++] = '\\'; out[j++] = 'n'; }
+        else if (c == '\r') { out[j++] = '\\'; out[j++] = 'r'; }
+        else if (c == '\t') { out[j++] = '\\'; out[j++] = 't'; }
+        else                { out[j++] = c; }
+    }
+    out[j] = '\0';
+}
+
+/*
+ * POST to an OpenAI-compatible endpoint via curl (handles HTTPS + auth).
+ * system_msg may be NULL.  Extracts first "content" value into out_buf.
+ * Returns chars written, or -1 on failure.
+ */
+static int llm_call(const char *host, uint16_t port, const char *path,
+                    const char *system_msg, const char *user_msg,
+                    char *out_buf, size_t out_sz)
+{
+    if (!host || host[0] == '\0') return -1;
+
+    char esc_sys[1024] = {0}, esc_usr[2048];
+    if (system_msg) json_escape(system_msg, esc_sys, sizeof(esc_sys));
+    json_escape(user_msg, esc_usr, sizeof(esc_usr));
+
+    char body[4096];
+    if (system_msg && system_msg[0]) {
+        snprintf(body, sizeof(body),
+            "{\"model\":\"%s\","
+             "\"messages\":["
+               "{\"role\":\"system\",\"content\":\"%s\"},"
+               "{\"role\":\"user\",\"content\":\"%s\"}"
+             "],"
+             "\"max_tokens\":512}",
+            g_code_model, esc_sys, esc_usr);
+    } else {
+        snprintf(body, sizeof(body),
+            "{\"model\":\"%s\","
+             "\"messages\":[{\"role\":\"user\",\"content\":\"%s\"}],"
+             "\"max_tokens\":512}",
+            g_code_model, esc_usr);
+    }
+
+    char tmppath[64] = "/tmp/nml_llm_XXXXXX";
+    int tmpfd = mkstemp(tmppath);
+    if (tmpfd < 0) return -1;
+    write(tmpfd, body, strlen(body));
+    close(tmpfd);
+
+    const char *scheme = (port == 443) ? "https" : "http";
+    char port_part[16] = "";
+    if (!((port == 443 && strcmp(scheme, "https") == 0) ||
+          (port == 80  && strcmp(scheme, "http")  == 0)))
+        snprintf(port_part, sizeof(port_part), ":%u", port);
+
+    char cmd[1024];
+    if (g_llm_api_key[0]) {
+        snprintf(cmd, sizeof(cmd),
+            "curl -s --max-time 30 -X POST '%s://%s%s%s' "
+            "-H 'Authorization: Bearer %s' "
+            "-H 'Content-Type: application/json' "
+            "-d '@%s' 2>/dev/null",
+            scheme, host, port_part, path, g_llm_api_key, tmppath);
+    } else {
+        snprintf(cmd, sizeof(cmd),
+            "curl -s --max-time 30 -X POST '%s://%s%s%s' "
+            "-H 'Content-Type: application/json' "
+            "-d '@%s' 2>/dev/null",
+            scheme, host, port_part, path, tmppath);
+    }
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) { unlink(tmppath); return -1; }
+
+    char resp[HTTP_BUF_SZ];
+    size_t total = 0, n;
+    while ((n = fread(resp + total, 1, sizeof(resp) - 1 - total, fp)) > 0)
+        total += n;
+    resp[total] = '\0';
+    pclose(fp);
+    unlink(tmppath);
+
+    if (total == 0) return -1;
+
+    char *p = strstr(resp, "\"content\":");
+    if (!p) return -1;
+    p += 10;
+    while (*p == ' ') p++;
+    if (*p != '"') return -1;
+    p++;
+
+    int i = 0;
+    while (*p && *p != '"' && i < (int)out_sz - 1) {
+        if (*p == '\\' && *(p + 1)) p++;
+        out_buf[i++] = *p++;
+    }
+    out_buf[i] = '\0';
+    return i;
+}
+
+/* ── HMAC-SHA256 helper ──────────────────────────────────────────────── */
+
+/*
+ * Compute HMAC-SHA256(key, data) and write lowercase hex to out (65 bytes).
+ * Uses SHA256_CTX from nml_crypto.h.
+ */
+static void hmac_sha256_hex(const char *key, const uint8_t *data, size_t data_len,
+                            char out[65])
+{
+    uint8_t k[64];
+    uint8_t ipad[64], opad[64];
+    size_t klen = strlen(key);
+
+    memset(k, 0, sizeof(k));
+    if (klen <= 64) {
+        memcpy(k, key, klen);
+    } else {
+        SHA256_CTX ctx;
+        sha256_init(&ctx);
+        sha256_update(&ctx, (const uint8_t *)key, klen);
+        sha256_final(&ctx, k);
+    }
+
+    for (int i = 0; i < 64; i++) {
+        ipad[i] = k[i] ^ 0x36u;
+        opad[i] = k[i] ^ 0x5Cu;
+    }
+
+    uint8_t inner[32];
+    SHA256_CTX ctx;
+    sha256_init(&ctx);
+    sha256_update(&ctx, ipad, 64);
+    sha256_update(&ctx, data, data_len);
+    sha256_final(&ctx, inner);
+
+    uint8_t digest[32];
+    sha256_init(&ctx);
+    sha256_update(&ctx, opad, 64);
+    sha256_update(&ctx, inner, 32);
+    sha256_final(&ctx, digest);
+
+    for (int i = 0; i < 32; i++)
+        snprintf(out + i * 2, 3, "%02x", digest[i]);
+    out[64] = '\0';
+}
+
 /* ── Webhook delivery ────────────────────────────────────────────────── */
 
 static void webhook_fire(const char *event, const char *payload)
@@ -278,9 +447,80 @@ static void webhook_fire(const char *event, const char *payload)
             "{\"event\":\"%s\",\"payload\":%s,\"source\":\"%s\"}",
             event, payload, g_agent_name);
 
-        char resp[1024];
-        internal_http(whost, wport, "POST", path, body, resp, sizeof(resp));
-        /* Delivery is best-effort; ignore response */
+        /* Compute HMAC-SHA256 signature if an API key is set */
+        char sig_header[128] = {0};
+        if (g_api_key[0] != '\0') {
+            char hex[65];
+            hmac_sha256_hex(g_api_key,
+                            (const uint8_t *)body, strlen(body),
+                            hex);
+            snprintf(sig_header, sizeof(sig_header), "sha256=%s", hex);
+        }
+
+        /* Retry up to 3 times with exponential back-off (1s / 2s / 4s) */
+        int delivered = 0;
+        for (int attempt = 0; attempt < 3 && !delivered; attempt++) {
+            if (attempt > 0) {
+                struct timeval delay;
+                delay.tv_sec  = 1 << (attempt - 1);   /* 1, 2 */
+                delay.tv_usec = 0;
+                select(0, NULL, NULL, NULL, &delay);
+            }
+
+            struct sockaddr_in waddr;
+            memset(&waddr, 0, sizeof(waddr));
+            waddr.sin_family      = AF_INET;
+            waddr.sin_port        = htons(wport);
+            waddr.sin_addr.s_addr = inet_addr(whost);
+
+            compat_socket_t wfd = socket(AF_INET, SOCK_STREAM, 0);
+            if (wfd == COMPAT_INVALID_SOCKET) continue;
+            struct timeval tv = {WEBHOOK_TIMEOUT_S, 0};
+            setsockopt(wfd, SOL_SOCKET, SO_RCVTIMEO,
+                       COMPAT_SOCKOPT_CAST(&tv), sizeof(tv));
+            setsockopt(wfd, SOL_SOCKET, SO_SNDTIMEO,
+                       COMPAT_SOCKOPT_CAST(&tv), sizeof(tv));
+
+            if (connect(wfd, (struct sockaddr *)&waddr, sizeof(waddr)) < 0) {
+                compat_close_socket(wfd); continue;
+            }
+
+            char http_req[4096];
+            int req_len;
+            if (sig_header[0] != '\0') {
+                req_len = snprintf(http_req, sizeof(http_req),
+                    "POST %s HTTP/1.1\r\n"
+                    "Host: %s:%u\r\n"
+                    "Content-Type: application/json\r\n"
+                    "Content-Length: %zu\r\n"
+                    "X-NML-Signature: %s\r\n"
+                    "Connection: close\r\n\r\n%s",
+                    path, whost, wport, strlen(body), sig_header, body);
+            } else {
+                req_len = snprintf(http_req, sizeof(http_req),
+                    "POST %s HTTP/1.1\r\n"
+                    "Host: %s:%u\r\n"
+                    "Content-Type: application/json\r\n"
+                    "Content-Length: %zu\r\n"
+                    "Connection: close\r\n\r\n%s",
+                    path, whost, wport, strlen(body), body);
+            }
+            send(wfd, http_req, (size_t)req_len, 0);
+
+            char wbuf[256];
+            int rn = recv(wfd, wbuf, sizeof(wbuf) - 1, 0);
+            compat_close_socket(wfd);
+
+            /* Accept any HTTP 2xx as success */
+            if (rn > 0) {
+                wbuf[rn] = '\0';
+                if (strstr(wbuf, "HTTP/1") && strstr(wbuf, " 2"))
+                    delivered = 1;
+            }
+        }
+        if (!delivered)
+            fprintf(stderr, "[emissary] webhook %d delivery failed after 3 attempts\n",
+                    w->id);
     }
 }
 
@@ -629,6 +869,83 @@ static void handle_http(compat_socket_t cfd, const char *client_ip)
         compat_close_socket(cfd); return;
     }
 
+    /*
+     * POST /infer  body: {"prompt":"..."}
+     * Two-stage pipeline: Think model reasons, Code model generates NML spec.
+     * Publishes result as MSG_SPEC for Architect, returns reasoning + spec.
+     */
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/infer") == 0) {
+        char *body_start = strstr(req, "\r\n\r\n");
+        if (!body_start) {
+            http_send(cfd, 400, "{\"error\":\"no body\"}");
+            compat_close_socket(cfd); return;
+        }
+        body_start += 4;
+
+        char prompt[512] = {0};
+        if (json_str(body_start, "prompt", prompt, sizeof(prompt)) <= 0) {
+            http_send(cfd, 400, "{\"error\":\"prompt required\"}");
+            compat_close_socket(cfd); return;
+        }
+
+        /* Stage 1: Think model — reason about the intent */
+        char reasoning[768] = {0};
+        if (g_think_host[0] != '\0') {
+            char think_prompt[640];
+            snprintf(think_prompt, sizeof(think_prompt),
+                "User intent: %.400s "
+                "Analyze what NML operations are needed. "
+                "Be concise (2-3 sentences).",
+                prompt);
+            llm_call(g_think_host, g_think_port, g_llm_path,
+                     NULL, think_prompt, reasoning, sizeof(reasoning));
+        }
+
+        /* Stage 2: Code model — generate NML spec text */
+        char spec_text[512] = {0};
+        if (g_code_host[0] != '\0') {
+            char code_prompt[768];
+            if (reasoning[0] != '\0') {
+                snprintf(code_prompt, sizeof(code_prompt),
+                    "Analysis: %.300s Intent: %.200s "
+                    "Write a concise NML spec (1-2 sentences).",
+                    reasoning, prompt);
+            } else {
+                snprintf(code_prompt, sizeof(code_prompt),
+                    "%.400s Write a concise NML spec (1-2 sentences).", prompt);
+            }
+            llm_call(g_code_host, g_code_port, g_llm_path,
+                     "Generate a minimal NML program spec. "
+                     "Output only the spec text.",
+                     code_prompt, spec_text, sizeof(spec_text));
+        }
+
+        /* Publish as MSG_SPEC for Architect to process */
+        if (spec_text[0] != '\0') {
+            char spec_json[640];
+            snprintf(spec_json, sizeof(spec_json),
+                "{\"source\":\"emissary-infer\",\"spec\":\"%s\"}", spec_text);
+            uint8_t pkt[NML_MAX_PROGRAM_LEN + 64];
+            int pkt_len = msg_encode(pkt, sizeof(pkt), MSG_SPEC,
+                                     g_agent_name, g_http_port, spec_json);
+            if (pkt_len > 0)
+                mqtt_transport_publish(&g_mqtt, MSG_SPEC, pkt, (size_t)pkt_len);
+        }
+
+        char resp_body[1536];
+        snprintf(resp_body, sizeof(resp_body),
+            "{\"ok\":true,\"reasoning\":\"%s\",\"spec\":\"%s\",\"queued\":%s}",
+            reasoning[0]  ? reasoning  : "",
+            spec_text[0]  ? spec_text  : "",
+            spec_text[0]  ? "true" : "false");
+        http_send(cfd, 200, resp_body);
+        printf("[emissary] /infer  think=%s code=%s queued=%s\n",
+               g_think_host[0] ? "yes" : "no",
+               g_code_host[0]  ? "yes" : "no",
+               spec_text[0]    ? "yes" : "no");
+        compat_close_socket(cfd); return;
+    }
+
     /* ── DELETE /webhooks/<id> ── */
     if (strcmp(method, "DELETE") == 0 &&
         strncmp(path, "/webhooks/", 10) == 0) {
@@ -656,7 +973,10 @@ static void print_usage(const char *prog)
         "Usage: %s [--name NAME] [--broker HOST] [--broker-port PORT]\n"
         "          [--port HTTP_PORT] [--api-key TOKEN]\n"
         "          [--sentient HOST] [--sentient-port PORT]\n"
-        "          [--oracle HOST]   [--oracle-port PORT]\n",
+        "          [--oracle HOST]   [--oracle-port PORT]\n"
+        "          [--think-host HOST] [--think-port PORT] [--think-model MODEL]\n"
+        "          [--code-host HOST]  [--code-port PORT]  [--code-model MODEL]\n"
+        "          [--llm-path PATH]   [--llm-api-key KEY]\n",
         prog);
 }
 
@@ -684,6 +1004,22 @@ int main(int argc, char *argv[])
             snprintf(g_oracle_host, sizeof(g_oracle_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--oracle-port") == 0 && i + 1 < argc)
             g_oracle_port = (uint16_t)atoi(argv[++i]);
+        else if (strcmp(argv[i], "--think-host") == 0 && i + 1 < argc)
+            snprintf(g_think_host, sizeof(g_think_host), "%s", argv[++i]);
+        else if (strcmp(argv[i], "--think-port") == 0 && i + 1 < argc)
+            g_think_port = (uint16_t)atoi(argv[++i]);
+        else if (strcmp(argv[i], "--code-host") == 0 && i + 1 < argc)
+            snprintf(g_code_host, sizeof(g_code_host), "%s", argv[++i]);
+        else if (strcmp(argv[i], "--code-port") == 0 && i + 1 < argc)
+            g_code_port = (uint16_t)atoi(argv[++i]);
+        else if (strcmp(argv[i], "--llm-path") == 0 && i + 1 < argc)
+            snprintf(g_llm_path, sizeof(g_llm_path), "%s", argv[++i]);
+        else if (strcmp(argv[i], "--llm-api-key") == 0 && i + 1 < argc)
+            snprintf(g_llm_api_key, sizeof(g_llm_api_key), "%s", argv[++i]);
+        else if (strcmp(argv[i], "--think-model") == 0 && i + 1 < argc)
+            snprintf(g_think_model, sizeof(g_think_model), "%s", argv[++i]);
+        else if (strcmp(argv[i], "--code-model") == 0 && i + 1 < argc)
+            snprintf(g_code_model, sizeof(g_code_model), "%s", argv[++i]);
         else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]); return 0;
         }
@@ -731,6 +1067,10 @@ int main(int argc, char *argv[])
            g_sentient_host, g_sentient_port,
            g_oracle_host, g_oracle_port,
            g_broker_host, g_broker_port);
+    if (g_think_host[0] || g_code_host[0])
+        printf("[emissary] infer pipeline: think=%s:%u  code=%s:%u\n",
+               g_think_host[0] ? g_think_host : "(disabled)", g_think_port,
+               g_code_host[0]  ? g_code_host  : "(disabled)", g_code_port);
 
     /* ── Main loop ── */
     time_t last_heartbeat = 0;

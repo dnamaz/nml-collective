@@ -62,6 +62,14 @@ int vote_add(VoteTable *t, const char *phash,
 int vote_get_result(const VoteTable *t, const char *phash, float *mean_out);
 
 /*
+ * Copy the raw scores from a session (committed or not) into out_scores.
+ * Returns the number of scores copied, or -1 if the session is not found.
+ * max_scores should be >= VOTE_MAX_VOTERS to avoid truncation.
+ */
+int vote_get_scores(const VoteTable *t, const char *phash,
+                    float *out_scores, int max_scores);
+
+/*
  * Expire sessions older than max_age_seconds.
  * Call periodically to reclaim slots.
  */

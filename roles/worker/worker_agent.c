@@ -8,6 +8,15 @@
  *   MQTT — primary; connect to Herald broker via --broker HOST
  *   UDP  — fallback; multicast on LAN when --broker is omitted
  *
+ * Data cache:
+ *   Up to DATA_CACHE_MAX named datasets held in memory.  Datasets larger
+ *   than DATA_MMAP_THRESHOLD bytes are backed by anonymous mmap so the OS
+ *   can page them out under memory pressure.  Entries are evicted LRU.
+ *
+ *   nml/data/ready  → pre-fetch (or invalidate if hash changed)
+ *   nml/data/stale  → evict; re-fetched lazily on next program
+ *   nml/data/reject → evict and mark; not re-fetched
+ *
  * Usage:
  *   ./worker_agent [--name NAME] [--port PORT] [--data FILE]
  *                  [--data-name NAME] [--require-signed]
@@ -15,6 +24,10 @@
  */
 
 #define _POSIX_C_SOURCE 200809L
+/* Expose BSD/Darwin extensions (MAP_ANON) on Apple platforms */
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE
+#endif
 
 #include "../../edge/config.h"
 #include "../../edge/msg.h"
@@ -34,6 +47,17 @@
 #include <time.h>
 #include "compat.h"
 
+#ifdef COMPAT_POSIX
+#include <sys/mman.h>
+#endif
+
+/* ── Data cache constants ────────────────────────────────────────────── */
+
+#define DATA_CACHE_MAX       8
+#define DATA_MMAP_THRESHOLD  (256 * 1024)   /* mmap datasets larger than 256 KB */
+#define SHARD_BUF_SZ         (64 * 1024)    /* buffer for a single shard fetch */
+#define STREAM_THRESHOLD     (1000000)      /* float count above which streaming is used */
+
 /* ── Globals ─────────────────────────────────────────────────────────── */
 
 static volatile int g_running = 1;
@@ -52,9 +76,142 @@ static int           g_use_mqtt   = 0;
 static MQTTTransport g_mqtt;
 static UDPContext    g_udp;
 
-/* Agent identity (promoted to globals for send_result / broadcast_msg) */
+/* Agent identity */
 static const char   *g_agent_name = EDGE_AGENT_NAME;
 static uint16_t      g_agent_port = EDGE_HTTP_PORT;
+
+/* Default dataset name (from --data-name or "__local__" for --data FILE) */
+static const char   *g_data_name  = NULL;
+
+/* ── Data cache ──────────────────────────────────────────────────────── */
+
+typedef struct {
+    char    name[64];     /* dataset name key                               */
+    char    hash[17];     /* content hash for invalidation                  */
+    char   *ptr;          /* data pointer (heap or mmap)                    */
+    size_t  size;         /* byte length of data (excluding NUL terminator) */
+    int     is_mmap;      /* 1 = munmap on evict, 0 = free                  */
+    int     valid;        /* 1 = ready to use                               */
+    int     rejected;     /* 1 = evicted by nml/data/reject, skip re-fetch  */
+    time_t  last_used;
+} DataCacheEntry;
+
+static DataCacheEntry g_cache[DATA_CACHE_MAX];
+
+static void cache_free_entry(DataCacheEntry *e)
+{
+    if (!e->ptr) return;
+#ifdef COMPAT_POSIX
+    if (e->is_mmap) munmap(e->ptr, e->size + 1);
+    else
+#endif
+    free(e->ptr);
+    e->ptr     = NULL;
+    e->valid   = 0;
+    e->is_mmap = 0;
+    e->size    = 0;
+}
+
+static DataCacheEntry *cache_find_by_name(const char *name)
+{
+    for (int i = 0; i < DATA_CACHE_MAX; i++)
+        if (g_cache[i].name[0] && strcmp(g_cache[i].name, name) == 0)
+            return &g_cache[i];
+    return NULL;
+}
+
+static DataCacheEntry *cache_find_by_hash(const char *hash)
+{
+    for (int i = 0; i < DATA_CACHE_MAX; i++)
+        if (g_cache[i].name[0] && strcmp(g_cache[i].hash, hash) == 0)
+            return &g_cache[i];
+    return NULL;
+}
+
+/* Return the least-recently-used non-rejected slot, or slot 0 as fallback. */
+static DataCacheEntry *cache_evict_lru(void)
+{
+    /* Prefer an empty slot first */
+    for (int i = 0; i < DATA_CACHE_MAX; i++)
+        if (!g_cache[i].name[0]) return &g_cache[i];
+
+    DataCacheEntry *lru = &g_cache[0];
+    for (int i = 1; i < DATA_CACHE_MAX; i++)
+        if (g_cache[i].last_used < lru->last_used) lru = &g_cache[i];
+
+    printf("[%s] cache evict LRU: '%s'\n", g_agent_name, lru->name);
+    cache_free_entry(lru);
+    lru->name[0]  = '\0';
+    lru->hash[0]  = '\0';
+    lru->rejected = 0;
+    return lru;
+}
+
+/*
+ * Store data into the cache under name/hash.  Takes ownership of the
+ * malloc'd data pointer.  If size > DATA_MMAP_THRESHOLD (and on POSIX),
+ * the data is moved into anonymous mmap and the heap buffer is freed.
+ */
+static DataCacheEntry *cache_store(const char *name, const char *hash,
+                                   char *data, size_t size)
+{
+    DataCacheEntry *slot = cache_find_by_name(name);
+    if (!slot) slot = cache_evict_lru();
+    else cache_free_entry(slot);
+
+    snprintf(slot->name, sizeof(slot->name), "%s", name);
+    snprintf(slot->hash, sizeof(slot->hash), "%s", hash ? hash : "");
+    slot->size      = size;
+    slot->rejected  = 0;
+    slot->last_used = time(NULL);
+
+#ifdef COMPAT_POSIX
+    if (size > DATA_MMAP_THRESHOLD) {
+        void *m = mmap(NULL, size + 1, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (m != MAP_FAILED) {
+            memcpy(m, data, size);
+            ((char *)m)[size] = '\0';
+            free(data);
+            slot->ptr     = (char *)m;
+            slot->is_mmap = 1;
+            slot->valid   = 1;
+            printf("[%s] cached '%s' in mmap (%zu KB)\n",
+                   g_agent_name, name, size / 1024);
+            return slot;
+        }
+        /* mmap failed — fall through to heap */
+    }
+#endif
+    slot->ptr     = data;
+    slot->is_mmap = 0;
+    slot->valid   = 1;
+    printf("[%s] cached '%s' in heap (%zu bytes)\n", g_agent_name, name, size);
+    return slot;
+}
+
+/* ── JSON helper ─────────────────────────────────────────────────────── */
+
+static int json_str(const char *json, const char *key,
+                    char *out, size_t out_sz)
+{
+    if (!json || !key || !out || out_sz == 0) return -1;
+    char needle[128];
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    const char *p = strstr(json, needle);
+    if (!p) return -1;
+    p += strlen(needle);
+    while (*p == ' ' || *p == ':') p++;
+    if (*p != '"') return -1;
+    p++;
+    size_t i = 0;
+    while (*p && *p != '"' && i < out_sz - 1) {
+        if (*p == '\\' && *(p + 1)) p++;
+        out[i++] = *p++;
+    }
+    out[i] = '\0';
+    return (int)i;
+}
 
 /* ── Helpers ─────────────────────────────────────────────────────────── */
 
@@ -107,44 +264,138 @@ static char *nebula_extract_content(const uint8_t *buf, size_t buf_len)
 }
 
 /*
- * Fetch data from a sentient peer (HTTP GET /data/get?name=X → /objects/hash).
+ * Parse the byte length of the NebulaDisk content section without extracting it.
+ * Returns the content length in bytes, or 0 on parse failure.
  */
-static char *fetch_data(const char *sentient_ip, uint16_t sentient_port,
-                        const char *data_name,
-                        char *resp_buf, size_t resp_buf_sz)
+static size_t nebula_content_len(const uint8_t *buf, size_t buf_len)
 {
-    char path[256];
-    snprintf(path, sizeof(path), "/data/get?name=%s", data_name);
-    int n = http_get(sentient_ip, sentient_port, path, resp_buf, resp_buf_sz);
-    if (n <= 0) {
-        fprintf(stderr, "[%s] fetch: GET %s failed\n", g_agent_name, path);
-        return NULL;
+    if (buf_len < 4 || memcmp(buf, "NML\x02", 4) != 0) return 0;
+    size_t pos = 4 + 8;
+    if (pos + 2 > buf_len) return 0;
+    pos++;                           /* obj_type */
+    uint8_t author_len = buf[pos++];
+    pos += author_len + 8;           /* author + timestamp */
+    if (pos + 1 > buf_len) return 0;
+    uint8_t ndims = buf[pos++];
+    pos += (size_t)ndims * 4;
+    if (pos + 5 > buf_len) return 0;
+    pos++;                           /* dtype */
+    uint32_t clen = ((uint32_t)buf[pos]   << 24) |
+                    ((uint32_t)buf[pos+1] << 16) |
+                    ((uint32_t)buf[pos+2] <<  8) |
+                     (uint32_t)buf[pos+3];
+    return (size_t)clen;
+}
+
+/*
+ * Fetch all shards described in manifest_json from the originating custodian
+ * and assemble them into a single NML data string
+ * "@name shape=N,K dtype=f32 data=v0,v1,...".
+ * Returns a malloc'd NUL-terminated string; caller owns it.
+ * Returns NULL on any fatal error.
+ */
+static char *assemble_from_manifest(const char *manifest_json)
+{
+    char cust_host[128] = "127.0.0.1";
+    char ds_name[64]    = "training_data";
+    int  total_floats   = 0;
+    int  features       = 1;
+    uint16_t cust_port  = 9004;
+
+    json_str(manifest_json, "custodian_host", cust_host, sizeof(cust_host));
+    json_str(manifest_json, "name",           ds_name,   sizeof(ds_name));
+
+    const char *p;
+    p = strstr(manifest_json, "\"total_floats\":");
+    if (p) total_floats = atoi(p + 15);
+    p = strstr(manifest_json, "\"features\":");
+    if (p) features = atoi(p + 11);
+    p = strstr(manifest_json, "\"custodian_port\":");
+    if (p) cust_port = (uint16_t)atoi(p + 17);
+
+    if (total_floats <= 0) return NULL;
+    if (features < 1) features = 1;
+
+    /* Allocate output buffer — header + worst-case float ASCII */
+    size_t out_sz = 128 + (size_t)total_floats * 14;
+    char  *out    = (char *)malloc(out_sz);
+    if (!out) return NULL;
+
+    int pos = snprintf(out, out_sz, "@%s shape=%d,%d dtype=f32 data=",
+                       ds_name, total_floats, features);
+
+    char  *shard_buf = (char *)malloc(SHARD_BUF_SZ);
+    if (!shard_buf) { free(out); return NULL; }
+
+    /* Iterate shards[] array */
+    const char *sp = strstr(manifest_json, "\"shards\":[");
+    if (!sp) { free(shard_buf); free(out); return NULL; }
+    sp += 10;
+
+    int first_float = 1;
+    while (*sp) {
+        while (*sp == ' ' || *sp == ',') sp++;
+        if (*sp == ']' || *sp == '\0') break;
+        if (*sp != '"') { sp++; continue; }
+        sp++;
+        char shash[17] = {0};
+        int hi = 0;
+        while (*sp && *sp != '"' && hi < 16) shash[hi++] = *sp++;
+        if (*sp == '"') sp++;
+        if (hi != 16) continue;
+
+        /* Fetch shard NebulaDisk object from custodian */
+        char spath[64];
+        snprintf(spath, sizeof(spath), "/objects/%s", shash);
+        int sn = http_get(cust_host, cust_port, spath, shard_buf, SHARD_BUF_SZ);
+        if (sn <= 0) {
+            fprintf(stderr, "[%s] assemble: failed to fetch shard %s\n",
+                    g_agent_name, shash);
+            continue;
+        }
+
+        /* Determine float count from NebulaDisk content_len */
+        size_t raw_bytes = nebula_content_len((const uint8_t *)shard_buf,
+                                              (size_t)sn);
+        int float_count = (int)(raw_bytes / sizeof(float));
+        if (float_count <= 0) {
+            fprintf(stderr, "[%s] assemble: bad shard header for %s\n",
+                    g_agent_name, shash);
+            continue;
+        }
+
+        /* Extract raw float32 bytes */
+        char *raw = nebula_extract_content((const uint8_t *)shard_buf, (size_t)sn);
+        if (!raw) {
+            fprintf(stderr, "[%s] assemble: nebula extract failed for %s\n",
+                    g_agent_name, shash);
+            continue;
+        }
+
+        /* Grow output buffer if needed */
+        size_t needed = (size_t)pos + (size_t)float_count * 15;
+        if (needed >= out_sz) {
+            out_sz = needed * 2;
+            char *tmp = (char *)realloc(out, out_sz);
+            if (!tmp) { free(raw); free(shard_buf); free(out); return NULL; }
+            out = tmp;
+        }
+
+        /* Append floats as ASCII */
+        const float *fptr = (const float *)raw;
+        for (int fi = 0; fi < float_count; fi++) {
+            if (!first_float) out[pos++] = ',';
+            first_float = 0;
+            pos += snprintf(out + pos, out_sz - (size_t)pos, "%.6g", fptr[fi]);
+        }
+        free(raw);
     }
 
-    char *p = strstr(resp_buf, "\"hash\"");
-    if (!p) return NULL;
-    p = strchr(p + 6, '"');
-    if (!p) return NULL;
-    p++;
-    char hash[65] = {0};
-    size_t hi = 0;
-    while (*p && *p != '"' && hi < sizeof(hash) - 1)
-        hash[hi++] = *p++;
-    if (!hi) return NULL;
-
-    snprintf(path, sizeof(path), "/objects/%s", hash);
-    n = http_get(sentient_ip, sentient_port, path, resp_buf, resp_buf_sz);
-    if (n <= 0) return NULL;
-
-    char *content = nebula_extract_content((const uint8_t *)resp_buf, (size_t)n);
-    if (content) {
-        printf("[%s] fetched data '%s' (hash=%s)\n", g_agent_name, data_name, hash);
-    } else {
-        content = malloc((size_t)n + 1);
-        if (content) { memcpy(content, resp_buf, (size_t)n); content[n] = '\0'; }
-        printf("[%s] fetched raw data '%s' (%d bytes)\n", g_agent_name, data_name, n);
-    }
-    return content;
+    free(shard_buf);
+    if ((size_t)pos < out_sz) out[pos] = '\0';
+    printf("[%s] assembled manifest: %d floats (%zu bytes)\n",
+           g_agent_name, total_floats, (size_t)pos);
+    return out;
 }
 
 static const PeerEntry *find_sentient(void)
@@ -157,6 +408,164 @@ static const PeerEntry *find_sentient(void)
             return e;
     }
     return NULL;
+}
+
+/*
+ * Fetch dataset by name from Sentient, store in cache, and return the entry.
+ * If expected_hash is non-NULL and the cache already holds that hash, returns
+ * the existing entry without a network round-trip.
+ * Returns NULL on failure.
+ */
+static DataCacheEntry *fetch_and_cache(const char *name)
+{
+    const PeerEntry *sentient = find_sentient();
+    if (!sentient) {
+        fprintf(stderr, "[%s] no sentient peer to fetch '%s'\n",
+                g_agent_name, name);
+        return NULL;
+    }
+
+    size_t buf_sz = NML_MAX_TENSOR_SIZE + 8192;
+    char  *buf    = malloc(buf_sz);
+    if (!buf) return NULL;
+
+    /* Step 1 — resolve name → hash */
+    char path[256];
+    snprintf(path, sizeof(path), "/data/get?name=%s", name);
+    int n = http_get(sentient->ip, sentient->port, path, buf, (int)buf_sz);
+    if (n <= 0) {
+        fprintf(stderr, "[%s] fetch: GET %s failed\n", g_agent_name, path);
+        free(buf);
+        return NULL;
+    }
+
+    char hash[65] = {0};
+    const char *p = strstr(buf, "\"hash\"");
+    if (p) {
+        p = strchr(p + 6, '"');
+        if (p) {
+            p++;
+            size_t hi = 0;
+            while (*p && *p != '"' && hi < sizeof(hash) - 1)
+                hash[hi++] = *p++;
+        }
+    }
+    if (!hash[0]) { free(buf); return NULL; }
+
+    /* Step 2 — check cache; skip fetch if we already hold this hash */
+    DataCacheEntry *existing = cache_find_by_name(name);
+    if (existing && existing->valid && strcmp(existing->hash, hash) == 0) {
+        existing->last_used = time(NULL);
+        free(buf);
+        return existing;
+    }
+
+    /* Step 3 — fetch object bytes */
+    snprintf(path, sizeof(path), "/objects/%s", hash);
+    n = http_get(sentient->ip, sentient->port, path, buf, (int)buf_sz);
+    if (n <= 0) { free(buf); return NULL; }
+
+    /* Step 4 — extract content; take ownership of heap buffer */
+    char  *content = nebula_extract_content((const uint8_t *)buf, (size_t)n);
+    size_t content_sz;
+    if (content) {
+        content_sz = strlen(content);
+        free(buf);
+    } else {
+        content    = buf;
+        content_sz = (size_t)n;
+        content[n] = '\0';
+    }
+
+    /* Step 5 — if content is a manifest, assemble shards or keep raw for streaming */
+    if (content && strncmp(content, "{\"type\":\"manifest\"", 18) == 0) {
+        /* Check total_floats to decide between assembly (Phase 2) and streaming (Phase 3B) */
+        int total_floats = 0;
+        const char *tfp = strstr(content, "\"total_floats\":");
+        if (tfp) total_floats = atoi(tfp + 15);
+
+        if (total_floats > 0 && total_floats <= STREAM_THRESHOLD) {
+            /* Small enough: assemble full NML data string in memory */
+            printf("[%s] manifest detected for '%s' — assembling %d floats\n",
+                   g_agent_name, name, total_floats);
+            char *assembled = assemble_from_manifest(content);
+            free(content);
+            if (!assembled) {
+                fprintf(stderr, "[%s] failed to assemble manifest for '%s'\n",
+                        g_agent_name, name);
+                return NULL;
+            }
+            content    = assembled;
+            content_sz = strlen(assembled);
+        } else {
+            /* Too large: keep raw manifest JSON in cache for streaming execution */
+            printf("[%s] manifest detected for '%s' — %d floats (streaming mode)\n",
+                   g_agent_name, name, total_floats);
+            /* content_sz already set above; content is the raw manifest JSON */
+        }
+    }
+
+    printf("[%s] fetched '%s' hash=%s (%zu bytes)\n",
+           g_agent_name, name, hash, content_sz);
+    return cache_store(name, hash, content, content_sz);
+}
+
+/* ── MQTT data-lifecycle handlers ────────────────────────────────────── */
+
+static void handle_data_ready(const char *json)
+{
+    char name[64] = {0}, hash[17] = {0};
+    json_str(json, "name", name, sizeof(name));
+    json_str(json, "hash", hash, sizeof(hash));
+    if (!name[0]) return;
+
+    /* Skip if we already hold this exact version */
+    DataCacheEntry *e = cache_find_by_name(name);
+    if (e && e->valid && strcmp(e->hash, hash) == 0) return;
+
+    /* Evict stale version before pre-fetching */
+    if (e && e->valid) {
+        printf("[%s] invalidating stale cache for '%s' (old=%s new=%s)\n",
+               g_agent_name, name, e->hash, hash);
+        cache_free_entry(e);
+    }
+
+    /* Only pre-fetch datasets this worker cares about */
+    if (!g_data_name || strcmp(name, g_data_name) != 0) return;
+
+    printf("[%s] data/ready: pre-fetching '%s' hash=%s\n",
+           g_agent_name, name, hash);
+    fetch_and_cache(name);
+}
+
+static void handle_data_stale(const char *json)
+{
+    char hash[17] = {0};
+    json_str(json, "hash", hash, sizeof(hash));
+    if (!hash[0]) return;
+
+    DataCacheEntry *e = cache_find_by_hash(hash);
+    if (e && e->valid) {
+        printf("[%s] data/stale: evicting '%s' (hash=%s) — will re-fetch\n",
+               g_agent_name, e->name, hash);
+        cache_free_entry(e);
+        /* Leave name/hash in slot so next program triggers a fresh fetch */
+    }
+}
+
+static void handle_data_reject(const char *json)
+{
+    char hash[17] = {0};
+    json_str(json, "hash", hash, sizeof(hash));
+    if (!hash[0]) return;
+
+    DataCacheEntry *e = cache_find_by_hash(hash);
+    if (e) {
+        printf("[%s] data/reject: evicting '%s' (hash=%s) — will not re-fetch\n",
+               g_agent_name, e->name, hash);
+        cache_free_entry(e);
+        e->rejected = 1;
+    }
 }
 
 /* ── Transport-agnostic send helpers ─────────────────────────────────── */
@@ -190,11 +599,200 @@ static void send_msg(int type, const char *payload)
 
 /* ── Message handlers ────────────────────────────────────────────────── */
 
+/*
+ * Scan program text for all @label references and verify each exists in
+ * the data string.  Returns 1 if all keys are present, 0 if any are missing
+ * (and logs the missing key names).
+ */
+static int check_data_keys(const char *program, const char *data,
+                            const char *agent_name)
+{
+    if (!data || !*data) return 1;  /* no data file — let exec handle it */
+
+    int all_ok = 1;
+    const char *p = program;
+    while ((p = strchr(p, '@')) != NULL) {
+        /* Find the start of this line to check the instruction */
+        const char *line = p;
+        while (line > program && *(line - 1) != '\n') line--;
+        /* Skip leading whitespace */
+        while (*line == ' ' || *line == '\t') line++;
+        /* ST writes to named memory — the key is an output, not a required input */
+        if (strncmp(line, "ST", 2) == 0 && (line[2] == ' ' || line[2] == '\t')) {
+            p++;
+            continue;
+        }
+
+        p++;  /* skip '@' */
+        /* Extract label: alphanumeric + underscore */
+        const char *start = p;
+        while (*p && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                      (*p >= '0' && *p <= '9') || *p == '_'))
+            p++;
+        size_t len = (size_t)(p - start);
+        if (len == 0) continue;
+
+        char key[64];
+        if (len >= sizeof(key)) len = sizeof(key) - 1;
+        memcpy(key, start, len);
+        key[len] = '\0';
+
+        /* Check for "@key " or "@key\n" or "@key" at end-of-string in data */
+        char needle[66];
+        snprintf(needle, sizeof(needle), "@%s", key);
+        if (!strstr(data, needle)) {
+            fprintf(stderr, "[%s] missing data key: @%s\n", agent_name, key);
+            all_ok = 0;
+        }
+    }
+    return all_ok;
+}
+
+/*
+ * Streaming execution for datasets above STREAM_THRESHOLD.
+ * manifest_json — raw manifest JSON from the data cache.
+ * program_body  — unsigned NML program text.
+ * score_str     — output buffer (size >= 32).
+ *
+ * Iterates over all shards, running one TNET pass per shard per epoch.
+ * Returns 0 on success, -1 on error.
+ */
+static int execute_streaming(const char *program_body,
+                              const char *manifest_json,
+                              char *score_str, size_t score_sz)
+{
+    /* Parse manifest fields */
+    char cust_host[128] = "127.0.0.1";
+    char ds_name[64]    = "training_data";
+    int  total_floats   = 0, features = 1, shard_float_count = 8192;
+    uint16_t cust_port  = 9004;
+
+    json_str(manifest_json, "custodian_host", cust_host, sizeof(cust_host));
+    json_str(manifest_json, "name",           ds_name,   sizeof(ds_name));
+    {
+        const char *p;
+        p = strstr(manifest_json, "\"total_floats\":");   if (p) total_floats       = atoi(p + 15);
+        p = strstr(manifest_json, "\"features\":");       if (p) features            = atoi(p + 11);
+        p = strstr(manifest_json, "\"shard_float_count\":"); if (p) shard_float_count = atoi(p + 20);
+        p = strstr(manifest_json, "\"custodian_port\":");  if (p) cust_port          = (uint16_t)atoi(p + 17);
+    }
+    if (total_floats <= 0 || features < 1) return -1;
+    if (shard_float_count <= 0) shard_float_count = 8192;
+
+    /* Extract epochs from TNET immediate in the program text */
+    int epochs = 1;
+    const char *tp = strstr(program_body, "TNET ");
+    if (!tp) tp = strstr(program_body, "\xe2\xa5\x81 ");  /* ⥁ */
+    if (tp) {
+        const char *ep = strchr(tp, '#');
+        if (ep) epochs = atoi(ep + 1);
+    }
+    if (epochs < 1) epochs = 1;
+
+    printf("[%s] streaming execution: %d floats, %d features, %d epochs\n",
+           g_agent_name, total_floats, features, epochs);
+
+    /* Compile program and prepare stateful VM */
+    NmlExecCtx *ctx = nml_exec_create(program_body);
+    if (!ctx) {
+        fprintf(stderr, "[%s] streaming: failed to create exec context\n",
+                g_agent_name);
+        return -1;
+    }
+
+    /* Shard fetch buffer */
+    char  *shard_buf = (char *)malloc(SHARD_BUF_SZ);
+    if (!shard_buf) { nml_exec_destroy(ctx); return -1; }
+
+    int samples_per_shard = shard_float_count / features;
+    if (samples_per_shard < 1) samples_per_shard = 1;
+
+    for (int epoch = 0; epoch < epochs; epoch++) {
+        const char *sp = strstr(manifest_json, "\"shards\":[");
+        if (!sp) break;
+        sp += 10;
+
+        while (*sp) {
+            while (*sp == ' ' || *sp == ',') sp++;
+            if (*sp == ']' || *sp == '\0') break;
+            if (*sp != '"') { sp++; continue; }
+            sp++;
+            char shash[17] = {0};
+            int hi = 0;
+            while (*sp && *sp != '"' && hi < 16) shash[hi++] = *sp++;
+            if (*sp == '"') sp++;
+            if (hi != 16) continue;
+
+            /* Fetch full shard */
+            char spath[64];
+            snprintf(spath, sizeof(spath), "/objects/%s", shash);
+            int sn = http_get(cust_host, cust_port, spath, shard_buf, SHARD_BUF_SZ);
+            if (sn <= 0) {
+                fprintf(stderr, "[%s] streaming: failed to fetch shard %s\n",
+                        g_agent_name, shash);
+                continue;
+            }
+
+            /* Count floats from NebulaDisk content_len */
+            size_t raw_bytes   = nebula_content_len((const uint8_t *)shard_buf, (size_t)sn);
+            int    float_count = (int)(raw_bytes / sizeof(float));
+            if (float_count <= 0) continue;
+
+            /* Extract raw float bytes */
+            char *raw = nebula_extract_content((const uint8_t *)shard_buf, (size_t)sn);
+            if (!raw) continue;
+
+            /* Build NML data string for this shard */
+            int shard_samples = float_count / features;
+            if (shard_samples < 1) { free(raw); continue; }
+
+            size_t dsz = 128 + (size_t)float_count * 14;
+            char  *data_str = (char *)malloc(dsz);
+            size_t lsz = 128 + (size_t)shard_samples * 14;
+            char  *lbl_str  = (char *)malloc(lsz);
+            if (!data_str || !lbl_str) {
+                free(raw); free(data_str); free(lbl_str); continue;
+            }
+
+            /* First (features-1) columns per row → training_data */
+            /* Last column → training_labels */
+            int input_cols = features - 1;
+            if (input_cols < 1) input_cols = features;
+
+            int dp = snprintf(data_str, dsz,
+                "@%s shape=%d,%d dtype=f32 data=", ds_name, shard_samples, input_cols);
+            int lp = snprintf(lbl_str, lsz,
+                "@training_labels shape=%d,1 dtype=f32 data=", shard_samples);
+
+            const float *fptr = (const float *)raw;
+            for (int s = 0; s < shard_samples; s++) {
+                for (int c = 0; c < input_cols; c++) {
+                    if (s > 0 || c > 0) { data_str[dp++] = ','; }
+                    dp += snprintf(data_str + dp, dsz - (size_t)dp, "%.6g",
+                                   fptr[s * features + c]);
+                }
+                if (s > 0) { lbl_str[lp++] = ','; }
+                lp += snprintf(lbl_str + lp, lsz - (size_t)lp, "%.6g",
+                               fptr[s * features + (features - 1)]);
+            }
+            free(raw);
+
+            nml_exec_load_shard(ctx, data_str, lbl_str);
+            free(data_str);
+            free(lbl_str);
+            nml_exec_run_pass(ctx, 0.01f);
+        }
+    }
+
+    free(shard_buf);
+
+    int rc = nml_exec_score(ctx, score_str, score_sz);
+    nml_exec_destroy(ctx);
+    return rc;
+}
+
 static void handle_program(const char *compact_payload,
                             const char *peer_name,
-                            char **local_data_ptr,
-                            const char *data_name,
-                            char *fetch_buf, size_t fetch_buf_sz,
                             int require_signed)
 {
     static char program[NML_MAX_PROGRAM_LEN + 1];
@@ -226,33 +824,53 @@ static void handle_program(const char *compact_payload,
         return;
     }
 
-    /* Fetch data on demand if not already loaded */
-    if (!*local_data_ptr && data_name && *data_name) {
-        const PeerEntry *sentient = find_sentient();
-        if (sentient) {
-            printf("[%s] fetching data '%s' from %s (%s:%u)\n",
-                   g_agent_name, data_name, sentient->name,
-                   sentient->ip, sentient->port);
-            *local_data_ptr = fetch_data(sentient->ip, sentient->port,
-                                         data_name, fetch_buf, fetch_buf_sz);
-        } else {
-            fprintf(stderr, "[%s] no sentient peer available to fetch data\n",
-                    g_agent_name);
+    /* Look up data in cache; lazy-fetch if missing */
+    const char *data = NULL;
+    if (g_data_name && *g_data_name) {
+        DataCacheEntry *e = cache_find_by_name(g_data_name);
+
+        if (e && e->rejected) {
+            fprintf(stderr, "[%s] skipping — data '%s' was rejected\n",
+                    g_agent_name, g_data_name);
+            return;
+        }
+
+        if (!e || !e->valid)
+            e = fetch_and_cache(g_data_name);
+
+        if (e && e->valid) {
+            e->last_used = time(NULL);
+            data = e->ptr;
         }
     }
 
-    if (!*local_data_ptr) {
+    if (!data) {
         fprintf(stderr, "[%s] skipping program — no data available\n", g_agent_name);
         return;
     }
 
     char phash[17];
     crypto_program_hash(body, phash);
+
     printf("[%s] executing %s (signed=%d) from %s\n",
            g_agent_name, phash, is_signed, peer_name);
 
     char score_str[32];
-    int rc = nml_exec_run(body, *local_data_ptr, score_str, sizeof(score_str));
+    int rc;
+
+    /* Detect manifest JSON in the data cache — use streaming execution path */
+    if (data && strncmp(data, "{\"type\":\"manifest\"", 18) == 0) {
+        rc = execute_streaming(body, data, score_str, sizeof(score_str));
+    } else {
+        /* Pre-flight: verify all @key references exist in our data */
+        if (!check_data_keys(body, data, g_agent_name)) {
+            fprintf(stderr, "[%s] skipping %s — data keys missing (see above)\n",
+                    g_agent_name, phash);
+            return;
+        }
+        rc = nml_exec_run(body, data, score_str, sizeof(score_str));
+    }
+
     if (rc == 0) {
         printf("[%s] score=%s hash=%s\n", g_agent_name, score_str, phash);
         send_result(phash, score_str);
@@ -283,8 +901,6 @@ static void handle_result(const char *payload, const char *peer_name)
 
 static void dispatch(int type, const char *peer_name, const char *sender_ip,
                      uint16_t peer_port, const char *payload,
-                     char **local_data_ptr, const char *data_name,
-                     char *fetch_buf, size_t fetch_buf_sz,
                      int require_signed, time_t now)
 {
     if (strcmp(peer_name, g_agent_name) == 0) return;
@@ -307,9 +923,7 @@ static void dispatch(int type, const char *peer_name, const char *sender_ip,
                     g_agent_name, peer_name);
             break;
         }
-        handle_program(payload, peer_name,
-                       local_data_ptr, data_name,
-                       fetch_buf, fetch_buf_sz, require_signed);
+        handle_program(payload, peer_name, require_signed);
         break;
     }
 
@@ -382,18 +996,20 @@ int main(int argc, char **argv)
         }
     }
 
-    char *local_data = NULL;
+    /* Load --data FILE into cache slot as "__local__" */
     if (data_path) {
-        local_data = read_file(data_path);
-        if (!local_data)
+        char *file_data = read_file(data_path);
+        if (!file_data) {
             fprintf(stderr, "[%s] WARNING: could not read data file %s\n",
                     g_agent_name, data_path);
-        else
+        } else {
+            cache_store("__local__", "", file_data, strlen(file_data));
+            g_data_name = "__local__";
             printf("[%s] loaded data from %s\n", g_agent_name, data_path);
+        }
+    } else if (data_name) {
+        g_data_name = data_name;
     }
-
-    size_t fetch_buf_sz = NML_MAX_TENSOR_SIZE + 8192;
-    char *fetch_buf = (data_name && !local_data) ? malloc(fetch_buf_sz) : NULL;
 
     identity_init(g_agent_name,
                   g_machine_hash_hex, g_machine_hash_bytes,
@@ -413,7 +1029,6 @@ int main(int argc, char **argv)
                                  g_identity_payload) != 0) {
             fprintf(stderr, "[%s] failed to connect to broker %s:%u\n",
                     g_agent_name, broker_host, broker_port);
-            free(local_data); free(fetch_buf);
             return 1;
         }
         printf("[%s] connected to broker %s:%u (port=%u require_signed=%d)\n",
@@ -422,7 +1037,6 @@ int main(int argc, char **argv)
     } else {
         if (udp_init(&g_udp, UDP_MULTICAST_GROUP, UDP_MULTICAST_PORT) < 0) {
             fprintf(stderr, "[%s] failed to init UDP\n", g_agent_name);
-            free(local_data); free(fetch_buf);
             return 1;
         }
         printf("[%s] joined %s:%u (port=%u require_signed=%d)\n",
@@ -431,14 +1045,15 @@ int main(int argc, char **argv)
         send_msg(MSG_ANNOUNCE, g_identity_payload);
     }
 
-    if (data_name && !local_data)
-        printf("[%s] will fetch data '%s' from sentient on first program\n",
-               g_agent_name, data_name);
+    if (g_data_name && strcmp(g_data_name, "__local__") != 0)
+        printf("[%s] will fetch data '%s' from sentient on first program "
+               "(or on nml/data/ready)\n", g_agent_name, g_data_name);
 
     static uint8_t in_buf[65536];
     static char    peer_name[64];
     static char    payload[NML_MAX_PROGRAM_LEN + 1];
     static char    sender_ip[46];
+    static char    topic[128];
 
     time_t last_heartbeat = time(NULL);
     time_t last_sweep     = last_heartbeat;
@@ -447,12 +1062,30 @@ int main(int argc, char **argv)
         time_t now = time(NULL);
 
         if (g_use_mqtt) {
-            /* MQTT: sync I/O with 1-second timeout, drain message queue */
             mqtt_transport_sync(&g_mqtt, 1000);
 
             int pkt_len;
-            while ((pkt_len = mqtt_transport_recv(&g_mqtt, in_buf,
-                                                   sizeof(in_buf), sender_ip)) > 0) {
+            while ((pkt_len = mqtt_transport_recv_ex(&g_mqtt, in_buf,
+                                                     sizeof(in_buf) - 1,
+                                                     sender_ip, topic)) > 0) {
+                /* Plain JSON data-lifecycle topics */
+                if (strcmp(topic, "nml/data/ready") == 0) {
+                    in_buf[pkt_len] = '\0';
+                    handle_data_ready((const char *)in_buf);
+                    continue;
+                }
+                if (strcmp(topic, "nml/data/stale") == 0) {
+                    in_buf[pkt_len] = '\0';
+                    handle_data_stale((const char *)in_buf);
+                    continue;
+                }
+                if (strcmp(topic, "nml/data/reject") == 0) {
+                    in_buf[pkt_len] = '\0';
+                    handle_data_reject((const char *)in_buf);
+                    continue;
+                }
+
+                /* NML wire-format messages */
                 int      type;
                 uint16_t peer_port;
                 if (msg_parse(in_buf, (size_t)pkt_len,
@@ -460,11 +1093,9 @@ int main(int argc, char **argv)
                               &peer_port, payload, sizeof(payload)) < 0)
                     continue;
                 dispatch(type, peer_name, sender_ip, peer_port, payload,
-                         &local_data, data_name, fetch_buf, fetch_buf_sz,
                          require_signed, now);
             }
         } else {
-            /* UDP: blocking recv with 1-second timeout */
             sender_ip[0] = '\0';
             int received = udp_recv(&g_udp, in_buf, sizeof(in_buf), 1000, sender_ip);
             if (received > 0) {
@@ -474,7 +1105,6 @@ int main(int argc, char **argv)
                               &type, peer_name, sizeof(peer_name),
                               &peer_port, payload, sizeof(payload)) >= 0) {
                     dispatch(type, peer_name, sender_ip, peer_port, payload,
-                             &local_data, data_name, fetch_buf, fetch_buf_sz,
                              require_signed, now);
                 }
             }
@@ -493,12 +1123,16 @@ int main(int argc, char **argv)
     }
 
     printf("\n[%s] shutting down\n", g_agent_name);
+
+    /* Release cache */
+    for (int i = 0; i < DATA_CACHE_MAX; i++)
+        cache_free_entry(&g_cache[i]);
+
     if (g_use_mqtt)
         mqtt_transport_close(&g_mqtt);
     else
         udp_close(&g_udp);
-    free(local_data);
-    free(fetch_buf);
+
     compat_winsock_cleanup();
     return 0;
 }

@@ -51,6 +51,7 @@ typedef struct {
     char   name[JSON_VAL_SZ];
     char   role[JSON_VAL_SZ];
     time_t issued_at;
+    time_t expires_at;   /* 0 = never expires */
 } CredEntry;
 
 /* ── Globals ─────────────────────────────────────────────────────────── */
@@ -74,6 +75,7 @@ static int       g_cred_count = 0;
 static const char *g_agent_name = "herald";
 static int         g_broker_port = 1883;
 static int         g_api_port    = 7780;
+static int         g_credential_ttl = 0;   /* 0 = no expiry; else seconds */
 static char        g_config_dir[MAX_PATH_LEN];
 static char        g_conf_file[MAX_PATH_LEN + 32];
 static char        g_passwd_file[MAX_PATH_LEN + 32];
@@ -509,7 +511,10 @@ static int cred_issue(const char *name, const char *password, const char *role)
     const char *effective_role = (role && role[0] != '\0') ? role : "worker";
     snprintf(g_creds[idx].role, sizeof(g_creds[idx].role), "%s", effective_role);
 
-    g_creds[idx].issued_at = time(NULL);
+    g_creds[idx].issued_at  = time(NULL);
+    g_creds[idx].expires_at = (g_credential_ttl > 0)
+                              ? g_creds[idx].issued_at + g_credential_ttl
+                              : 0;
 
     write_acl_file();
     broker_reload();
@@ -552,6 +557,39 @@ static int cred_revoke(const char *name)
 
     printf("[%s] revoked credential: %s\n", g_agent_name, name);
     return 0;
+}
+
+/*
+ * Generate a random alphanumeric password of length sz-1.
+ * Caller must have seeded srand() at startup.
+ */
+static void gen_password(char *out, size_t sz)
+{
+    static const char chars[] =
+        "abcdefghijklmnopqrstuvwxyz"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "0123456789";
+    size_t i;
+    for (i = 0; i + 1 < sz; i++)
+        out[i] = chars[rand() % (int)(sizeof(chars) - 1)];
+    out[i] = '\0';
+}
+
+/*
+ * Revoke any credentials whose TTL has expired.
+ * Called periodically from the main loop.
+ */
+static void cred_expire_check(void)
+{
+    if (g_credential_ttl == 0) return;
+    time_t now = time(NULL);
+    for (int i = g_cred_count - 1; i >= 0; i--) {
+        if (g_creds[i].expires_at > 0 && now >= g_creds[i].expires_at) {
+            printf("[%s] credential expired: %s\n",
+                   g_agent_name, g_creds[i].name);
+            cred_revoke(g_creds[i].name);
+        }
+    }
 }
 
 /* ── Minimal HTTP server ─────────────────────────────────────────────── */
@@ -632,19 +670,97 @@ static void http_respond(compat_socket_t fd, int status, const char *body)
     }
 }
 
+/*
+ * POST /credentials/request  body: {"agent":"NAME","role":"ROLE"}
+ * Agent self-registers: Herald auto-generates a password, issues the
+ * credential, and returns it.  TTL applies if --credential-ttl is set.
+ */
+static void handle_request(compat_socket_t fd, const char *body)
+{
+    char agent[JSON_VAL_SZ];
+    char role[JSON_VAL_SZ];
+
+    if (json_str(body, "agent", agent, sizeof(agent)) < 0) {
+        http_respond(fd, 400, "{\"error\":\"agent required\"}");
+        return;
+    }
+    if (json_str(body, "role", role, sizeof(role)) < 0) {
+        snprintf(role, sizeof(role), "worker");
+    }
+
+    char password[33];
+    gen_password(password, sizeof(password));
+
+    if (cred_issue(agent, password, role) < 0) {
+        http_respond(fd, 400, "{\"error\":\"credential issue failed\"}");
+        return;
+    }
+
+    int idx = cred_find(agent);
+    long ttl_remaining = 0;
+    if (idx >= 0 && g_creds[idx].expires_at > 0)
+        ttl_remaining = (long)(g_creds[idx].expires_at - time(NULL));
+
+    char resp[1024];
+    if (ttl_remaining > 0) {
+        snprintf(resp, sizeof(resp),
+                 "{\"agent\":\"%s\",\"role\":\"%s\","
+                 "\"password\":\"%s\",\"ttl\":%ld}",
+                 agent, role, password, ttl_remaining);
+    } else {
+        snprintf(resp, sizeof(resp),
+                 "{\"agent\":\"%s\",\"role\":\"%s\","
+                 "\"password\":\"%s\"}",
+                 agent, role, password);
+    }
+    http_respond(fd, 200, resp);
+}
+
 static void handle_health(compat_socket_t fd)
 {
     char body[512];
     snprintf(body, sizeof(body),
              "{\"status\":\"%s\",\"broker_pid\":%d,"
              "\"broker_restarts\":%d,\"credentials\":%d,"
-             "\"broker_port\":%d,\"api_port\":%d}",
+             "\"broker_port\":%d,\"api_port\":%d,\"credential_ttl\":%d}",
              g_broker_running ? "healthy" : "broker_down",
              (int)g_broker_pid,
              g_broker_restarts,
              g_cred_count,
              g_broker_port,
-             g_api_port);
+             g_api_port,
+             g_credential_ttl);
+    http_respond(fd, 200, body);
+}
+
+static void handle_list(compat_socket_t fd)
+{
+    /* Build JSON array: [{agent, role, issued_at, expires_at}] */
+    char body[MAX_CREDS * 160 + 4];
+    int  pos = 0;
+    body[pos++] = '[';
+    time_t now = time(NULL);
+    for (int i = 0; i < g_cred_count; i++) {
+        char entry[160];
+        long ttl_remaining = (g_creds[i].expires_at > 0)
+                             ? (long)(g_creds[i].expires_at - now)
+                             : -1;
+        snprintf(entry, sizeof(entry),
+                 "%s{\"agent\":\"%s\",\"role\":\"%s\","
+                 "\"issued_at\":%ld,\"ttl_remaining\":%ld}",
+                 i > 0 ? "," : "",
+                 g_creds[i].name,
+                 g_creds[i].role,
+                 (long)g_creds[i].issued_at,
+                 ttl_remaining);
+        int entry_len = (int)strlen(entry);
+        if (pos + entry_len + 2 < (int)sizeof(body)) {
+            memcpy(body + pos, entry, (size_t)entry_len);
+            pos += entry_len;
+        }
+    }
+    body[pos++] = ']';
+    body[pos]   = '\0';
     http_respond(fd, 200, body);
 }
 
@@ -768,12 +884,18 @@ static void http_serve_once(compat_socket_t server_fd)
     /* dispatch */
     if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
         handle_health(client_fd);
+    } else if (strcmp(method, "GET") == 0 &&
+               strcmp(path, "/credentials") == 0) {
+        handle_list(client_fd);
     } else if (strcmp(method, "POST") == 0 &&
                strcmp(path, "/credentials/issue") == 0) {
         handle_issue(client_fd, body_ptr);
     } else if (strcmp(method, "POST") == 0 &&
                strcmp(path, "/credentials/revoke") == 0) {
         handle_revoke(client_fd, body_ptr);
+    } else if (strcmp(method, "POST") == 0 &&
+               strcmp(path, "/credentials/request") == 0) {
+        handle_request(client_fd, body_ptr);
     } else if (strcmp(method, "OPTIONS") == 0) {
         http_respond(client_fd, 200, "{}");
     } else {
@@ -842,17 +964,23 @@ int main(int argc, char *argv[])
                      "%s", argv[++i]);
         } else if (strcmp(argv[i], "--no-auth") == 0) {
             g_no_auth = 1;
+        } else if (strcmp(argv[i], "--credential-ttl") == 0 && i + 1 < argc) {
+            g_credential_ttl = atoi(argv[++i]);
         } else {
             fprintf(stderr,
                     "Usage: %s [--name NAME] [--broker-port PORT] [--api-port PORT]\n"
                     "          [--config-dir DIR] [--mosquitto PATH]\n"
-                    "          [--mosquitto-passwd PATH] [--no-auth]\n",
+                    "          [--mosquitto-passwd PATH] [--no-auth]\n"
+                    "          [--credential-ttl SECONDS]\n",
                     argv[0]);
             return 1;
         }
     }
 
     compat_winsock_init();
+
+    /* Seed RNG for auto-generated passwords */
+    srand((unsigned int)(time(NULL) ^ (unsigned long)getpid()));
 
     /* build derived paths */
     snprintf(g_conf_file,   sizeof(g_conf_file),   "%s/mosquitto.conf", g_config_dir);
@@ -910,13 +1038,14 @@ int main(int argc, char *argv[])
     }
 
     /* startup banner */
-    printf("[%s] Herald active — broker port=%d  api port=%d  auth=%s\n",
+    printf("[%s] Herald active — broker port=%d  api port=%d  auth=%s%s\n",
            g_agent_name, g_broker_port, g_api_port,
-           g_no_auth ? "off" : "on");
+           g_no_auth ? "off" : "on",
+           g_credential_ttl > 0 ? "  ttl=enabled" : "");
     printf("[%s]   config dir: %s\n", g_agent_name, g_config_dir);
     printf("[%s]   mosquitto:  %s\n", g_agent_name, g_mosquitto_bin);
     printf("[%s]   REST: POST /credentials/issue | POST /credentials/revoke"
-           " | GET /health\n", g_agent_name);
+           " | POST /credentials/request | GET /credentials | GET /health\n", g_agent_name);
 
     /* main loop */
     time_t last_log = time(NULL);
@@ -939,6 +1068,8 @@ int main(int argc, char *argv[])
         if (broker_check() == 1) {
             broker_start();
         }
+
+        cred_expire_check();
 
         time_t now = time(NULL);
         if (now - last_log >= LOG_INTERVAL_SEC) {

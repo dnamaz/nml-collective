@@ -33,6 +33,11 @@ static void on_publish(void **state, struct mqtt_response_publish *published)
     memcpy(slot->data, published->application_message, len);
     slot->len = (int)len;
 
+    size_t tlen = published->topic_name_size;
+    if (tlen >= sizeof(slot->topic)) tlen = sizeof(slot->topic) - 1;
+    memcpy(slot->topic, published->topic_name, tlen);
+    slot->topic[tlen] = '\0';
+
     t->queue_head = (t->queue_head + 1) % MQTT_MSG_QUEUE_SZ;
     t->queue_count++;
 }
@@ -277,6 +282,33 @@ int mqtt_transport_recv(MQTTTransport *t, uint8_t *buf, size_t buf_sz,
     t->queue_count--;
 
     /* MQTT does not expose per-message sender IP — set to empty */
+    if (sender_ip_out)
+        sender_ip_out[0] = '\0';
+
+    return len;
+}
+
+int mqtt_transport_recv_ex(MQTTTransport *t, uint8_t *buf, size_t buf_sz,
+                           char *sender_ip_out, char *topic_out)
+{
+    if (t->queue_count <= 0) return 0;
+
+    MQTTQueuedMsg *slot = &t->queue[t->queue_tail];
+    int len = slot->len;
+
+    if (len <= 0 || (size_t)len > buf_sz) {
+        t->queue_tail = (t->queue_tail + 1) % MQTT_MSG_QUEUE_SZ;
+        t->queue_count--;
+        return -1;
+    }
+
+    memcpy(buf, slot->data, (size_t)len);
+    if (topic_out)
+        snprintf(topic_out, 128, "%s", slot->topic);
+
+    t->queue_tail = (t->queue_tail + 1) % MQTT_MSG_QUEUE_SZ;
+    t->queue_count--;
+
     if (sender_ip_out)
         sender_ip_out[0] = '\0';
 

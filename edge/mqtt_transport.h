@@ -36,6 +36,7 @@
 typedef struct {
     uint8_t data[MQTT_MSG_MAX_SZ];
     int     len;
+    char    topic[128];
 } MQTTQueuedMsg;
 
 /* ── Transport context ──────────────────────────────────────────────── */
@@ -117,5 +118,12 @@ int mqtt_transport_sync(MQTTTransport *t, int timeout_ms);
  */
 int mqtt_transport_recv(MQTTTransport *t, uint8_t *buf, size_t buf_sz,
                         char *sender_ip_out);
+
+/*
+ * Like mqtt_transport_recv but also returns the MQTT topic the message
+ * arrived on.  topic_out must be at least 128 bytes; may be NULL.
+ */
+int mqtt_transport_recv_ex(MQTTTransport *t, uint8_t *buf, size_t buf_sz,
+                           char *sender_ip_out, char *topic_out);
 
 #endif /* EDGE_MQTT_TRANSPORT_H */

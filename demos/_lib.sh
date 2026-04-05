@@ -25,6 +25,9 @@ esac
 PIDS=()
 BROKER_HOST="${BROKER_HOST:-127.0.0.1}"
 BROKER_PORT="${BROKER_PORT:-1883}"
+# Homebrew installs mosquitto to /opt/homebrew/sbin on macOS (Apple Silicon).
+# Override with: MOSQUITTO_BIN=/path/to/mosquitto bash demos/demo.sh
+MOSQUITTO_BIN="${MOSQUITTO_BIN:-/opt/homebrew/sbin/mosquitto}"
 
 nml_cleanup() {
     echo ""
@@ -56,7 +59,7 @@ nml_start_herald() {
     fi
 
     echo "[herald] Starting MQTT broker on :${broker_port}"
-    "$bin" --broker-port "$broker_port" --api-port "$http_port" "${passthrough[@]}" &
+    "$bin" --broker-port "$broker_port" --api-port "$http_port" --mosquitto "$MOSQUITTO_BIN" "${passthrough[@]}" &
     PIDS+=($!)
     BROKER_PORT="$broker_port"
 }

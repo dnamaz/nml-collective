@@ -74,6 +74,20 @@ int vote_get_result(const VoteTable *t, const char *phash, float *mean_out)
     return -1;
 }
 
+int vote_get_scores(const VoteTable *t, const char *phash,
+                    float *out_scores, int max_scores)
+{
+    for (int i = 0; i < t->count; i++) {
+        if (strncmp(t->sessions[i].phash, phash, 16) == 0) {
+            int n = t->sessions[i].count;
+            if (n > max_scores) n = max_scores;
+            memcpy(out_scores, t->sessions[i].scores, (size_t)n * sizeof(float));
+            return n;
+        }
+    }
+    return -1;
+}
+
 void vote_expire(VoteTable *t, time_t now, time_t max_age_seconds)
 {
     int i = 0;
