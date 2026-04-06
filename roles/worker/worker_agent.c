@@ -386,7 +386,8 @@ static char *assemble_from_manifest(const char *manifest_json)
         for (int fi = 0; fi < float_count; fi++) {
             if (!first_float) out[pos++] = ',';
             first_float = 0;
-            pos += snprintf(out + pos, out_sz - (size_t)pos, "%.6g", fptr[fi]);
+            int w = snprintf(out + pos, out_sz - (size_t)pos, "%.6g", fptr[fi]);
+            if (w > 0 && (size_t)(pos + w) < out_sz) pos += w;
         }
         free(raw);
     }

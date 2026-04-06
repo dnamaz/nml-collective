@@ -166,14 +166,27 @@ static int write_acl_file(void)
 
 static int run_command(const char *bin, char *const argv[])
 {
-    /* Build a flat command line from argv[] */
-    char cmdline[2048];
+    /* Compute total command-line length */
+    size_t total = 0;
+    for (int i = 0; argv[i]; i++) {
+        if (i > 0) total++;              /* space separator */
+        total += strlen(argv[i]);
+    }
+
+    char *cmdline = (char *)malloc(total + 1);
+    if (!cmdline) {
+        fprintf(stderr, "[%s] cmdline malloc failed\n", g_agent_name);
+        return -1;
+    }
+
     int pos = 0;
     for (int i = 0; argv[i]; i++) {
         if (i > 0) cmdline[pos++] = ' ';
-        pos += snprintf(cmdline + pos, sizeof(cmdline) - (size_t)pos,
-                        "%s", argv[i]);
+        size_t len = strlen(argv[i]);
+        memcpy(cmdline + pos, argv[i], len);
+        pos += (int)len;
     }
+    cmdline[pos] = '\0';
 
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
@@ -185,8 +198,10 @@ static int run_command(const char *bin, char *const argv[])
                         0, NULL, NULL, &si, &pi)) {
         fprintf(stderr, "[%s] CreateProcess %s failed (err=%lu)\n",
                 g_agent_name, bin, GetLastError());
+        free(cmdline);
         return -1;
     }
+    free(cmdline);
     WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD code = 0;
     GetExitCodeProcess(pi.hProcess, &code);
@@ -701,19 +716,33 @@ static void handle_request(compat_socket_t fd, const char *body)
     if (idx >= 0 && g_creds[idx].expires_at > 0)
         ttl_remaining = (long)(g_creds[idx].expires_at - time(NULL));
 
-    char resp[1024];
+    int resp_len;
     if (ttl_remaining > 0) {
-        snprintf(resp, sizeof(resp),
+        resp_len = snprintf(NULL, 0,
                  "{\"agent\":\"%s\",\"role\":\"%s\","
                  "\"password\":\"%s\",\"ttl\":%ld}",
                  agent, role, password, ttl_remaining);
     } else {
-        snprintf(resp, sizeof(resp),
+        resp_len = snprintf(NULL, 0,
+                 "{\"agent\":\"%s\",\"role\":\"%s\","
+                 "\"password\":\"%s\"}",
+                 agent, role, password);
+    }
+    char *resp = (char *)malloc((size_t)resp_len + 1);
+    if (!resp) { http_respond(fd, 500, "{\"error\":\"out of memory\"}"); return; }
+    if (ttl_remaining > 0) {
+        snprintf(resp, (size_t)resp_len + 1,
+                 "{\"agent\":\"%s\",\"role\":\"%s\","
+                 "\"password\":\"%s\",\"ttl\":%ld}",
+                 agent, role, password, ttl_remaining);
+    } else {
+        snprintf(resp, (size_t)resp_len + 1,
                  "{\"agent\":\"%s\",\"role\":\"%s\","
                  "\"password\":\"%s\"}",
                  agent, role, password);
     }
     http_respond(fd, 200, resp);
+    free(resp);
 }
 
 static void handle_health(compat_socket_t fd)
@@ -736,18 +765,15 @@ static void handle_health(compat_socket_t fd)
 static void handle_list(compat_socket_t fd)
 {
     /* Build JSON array: [{agent, role, issued_at, expires_at}] */
-    char body[MAX_CREDS * 160 + 4];
-    int  pos = 0;
-    body[pos++] = '[';
     time_t now = time(NULL);
+
+    /* First pass: compute total size needed */
+    size_t total = 2; /* [] */
     for (int i = 0; i < g_cred_count; i++) {
-        char entry[160];
         long ttl_remaining = (g_creds[i].expires_at > 0)
                              ? (long)(g_creds[i].expires_at - now)
                              : -1;
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wformat-truncation"
-        snprintf(entry, sizeof(entry),
+        int n = snprintf(NULL, 0,
                  "%s{\"agent\":\"%s\",\"role\":\"%s\","
                  "\"issued_at\":%ld,\"ttl_remaining\":%ld}",
                  i > 0 ? "," : "",
@@ -755,16 +781,32 @@ static void handle_list(compat_socket_t fd)
                  g_creds[i].role,
                  (long)g_creds[i].issued_at,
                  ttl_remaining);
-#pragma GCC diagnostic pop
-        int entry_len = (int)strlen(entry);
-        if (pos + entry_len + 2 < (int)sizeof(body)) {
-            memcpy(body + pos, entry, (size_t)entry_len);
-            pos += entry_len;
-        }
+        total += (size_t)n;
+    }
+
+    char *body = (char *)malloc(total + 1);
+    if (!body) { http_respond(fd, 500, "{\"error\":\"out of memory\"}"); return; }
+
+    /* Second pass: write entries */
+    int pos = 0;
+    body[pos++] = '[';
+    for (int i = 0; i < g_cred_count; i++) {
+        long ttl_remaining = (g_creds[i].expires_at > 0)
+                             ? (long)(g_creds[i].expires_at - now)
+                             : -1;
+        pos += snprintf(body + pos, total + 1 - (size_t)pos,
+                 "%s{\"agent\":\"%s\",\"role\":\"%s\","
+                 "\"issued_at\":%ld,\"ttl_remaining\":%ld}",
+                 i > 0 ? "," : "",
+                 g_creds[i].name,
+                 g_creds[i].role,
+                 (long)g_creds[i].issued_at,
+                 ttl_remaining);
     }
     body[pos++] = ']';
     body[pos]   = '\0';
     http_respond(fd, 200, body);
+    free(body);
 }
 
 static void handle_issue(compat_socket_t fd, const char *body)
@@ -788,10 +830,14 @@ static void handle_issue(compat_socket_t fd, const char *body)
         return;
     }
 
-    char resp[1024];
-    snprintf(resp, sizeof(resp),
+    int resp_len = snprintf(NULL, 0,
+             "{\"issued\":\"%s\",\"role\":\"%s\"}", agent, role);
+    char *resp = (char *)malloc((size_t)resp_len + 1);
+    if (!resp) { http_respond(fd, 500, "{\"error\":\"out of memory\"}"); return; }
+    snprintf(resp, (size_t)resp_len + 1,
              "{\"issued\":\"%s\",\"role\":\"%s\"}", agent, role);
     http_respond(fd, 200, resp);
+    free(resp);
 }
 
 static void handle_revoke(compat_socket_t fd, const char *body)

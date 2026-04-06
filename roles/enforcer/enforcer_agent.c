@@ -162,7 +162,9 @@ static void threat_add_evidence(ThreatEntry *e, const char *ev_type,
     int idx = e->evidence_n < MAX_EVIDENCE ? e->evidence_n
                                            : (e->evidence_n % MAX_EVIDENCE);
     strncpy(e->evidence[idx].ev_type, ev_type, sizeof(e->evidence[idx].ev_type) - 1);
+    e->evidence[idx].ev_type[sizeof(e->evidence[idx].ev_type) - 1] = '\0';
     strncpy(e->evidence[idx].detail,  detail,  sizeof(e->evidence[idx].detail) - 1);
+    e->evidence[idx].detail[sizeof(e->evidence[idx].detail) - 1] = '\0';
     e->evidence[idx].ts = time(NULL);
     if (e->evidence_n < MAX_EVIDENCE) e->evidence_n++;
 }

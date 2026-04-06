@@ -32,7 +32,8 @@ int vote_add(VoteTable *t, const char *phash,
         if (t->count >= VOTE_MAX_SESSIONS) return -2;
         s = &t->sessions[t->count++];
         memset(s, 0, sizeof(*s));
-        strncpy(s->phash, phash, 16);
+        strncpy(s->phash, phash, sizeof(s->phash) - 1);
+        s->phash[sizeof(s->phash) - 1] = '\0';
         s->first_vote = now;
     }
 

@@ -686,12 +686,17 @@ static void handle_http(compat_socket_t cfd)
     /* GET /pool — list all data items (shards are internal, excluded) */
     if (strcmp(method, "GET") == 0 && strcmp(path, "/pool") == 0) {
         char body[HTTP_BUF_SZ / 2];
-        int pos = snprintf(body, sizeof(body), "[");
+        int pos = 0, n;
+        n = snprintf(body, sizeof(body), "[");
+        if (n > 0 && (size_t)n < sizeof(body)) pos = n;
         int first = 1;
         for (int i = 0; i < g_item_count; i++) {
             const DataItem *it = &g_items[i];
             if (it->status == STATUS_SHARD) continue;
-            if (!first) pos += snprintf(body + pos, sizeof(body) - (size_t)pos, ",");
+            if (!first) {
+                n = snprintf(body + pos, sizeof(body) - (size_t)pos, ",");
+                if (n > 0 && (size_t)(pos + n) < sizeof(body)) pos += n;
+            }
             first = 0;
 
             /* Detect manifests and include shard_count */
@@ -707,7 +712,7 @@ static void handle_http(compat_socket_t cfd)
                          ",\"manifest\":true,\"shard_count\":%d", sc);
             }
 
-            pos += snprintf(body + pos, sizeof(body) - (size_t)pos,
+            n = snprintf(body + pos, sizeof(body) - (size_t)pos,
                 "{\"hash\":\"%s\",\"name\":\"%s\","
                  "\"author\":\"%s\",\"n_samples\":%d,"
                  "\"status\":\"%s\",\"served\":%d%s}",
@@ -715,6 +720,7 @@ static void handle_http(compat_socket_t cfd)
                 it->status == STATUS_APPROVED ? "approved"
                 : it->status == STATUS_REJECTED ? "rejected" : "pending",
                 it->served_count, extra);
+            if (n > 0 && (size_t)(pos + n) < sizeof(body)) pos += n;
         }
         snprintf(body + pos, sizeof(body) - (size_t)pos, "]");
         http_send(cfd, 200, body);
@@ -929,7 +935,8 @@ static void handle_http(compat_socket_t cfd)
                 hash, n_floats);
             printf("[custodian] ingested '%s'  samples=%d  hash=%s\n",
                    name, n_floats, hash);
-            strncpy(resp_hash, hash, sizeof(resp_hash));
+            strncpy(resp_hash, hash, sizeof(resp_hash) - 1);
+            resp_hash[sizeof(resp_hash) - 1] = '\0';
 
         } else {
             /* ── Sharded manifest path ── */
@@ -1012,10 +1019,12 @@ static void handle_http(compat_socket_t cfd)
                                 compat_close_socket(cfd); return; }
                     mj = tmp;
                 }
-                mpos += snprintf(mj + mpos, mj_sz - (size_t)mpos,
+                int sn = snprintf(mj + mpos, mj_sz - (size_t)mpos,
                     "%s\"%s\"", s > 0 ? "," : "", shard_hashes[s]);
+                if (sn > 0 && (size_t)(mpos + sn) < mj_sz) mpos += sn;
             }
-            mpos += snprintf(mj + mpos, mj_sz - (size_t)mpos, "]}");
+            { int sn = snprintf(mj + mpos, mj_sz - (size_t)mpos, "]}");
+              if (sn > 0 && (size_t)(mpos + sn) < mj_sz) mpos += sn; }
 
             char mhash[17];
             if (storage_put(g_data_dir, mj, (size_t)mpos,
@@ -1054,7 +1063,8 @@ static void handle_http(compat_socket_t cfd)
             printf("[custodian] ingested manifest '%s'  samples=%d"
                    "  shards=%d  hash=%s\n",
                    name, n_floats, n_shards, mhash);
-            strncpy(resp_hash, mhash, sizeof(resp_hash));
+            strncpy(resp_hash, mhash, sizeof(resp_hash) - 1);
+            resp_hash[sizeof(resp_hash) - 1] = '\0';
         }
 
         free(floats);

@@ -286,9 +286,11 @@ static void handle_result(const char *peer_name, const char *payload)
     char data_buf[VOTE_MAX_VOTERS * 16 + 64];
     int  pos = snprintf(data_buf, sizeof(data_buf),
                         "@agent_scores shape=%d dtype=f32 data=", n);
+    if (pos < 0 || (size_t)pos >= sizeof(data_buf)) return;
     for (int i = 0; i < n && pos < (int)sizeof(data_buf) - 16; i++) {
-        pos += snprintf(data_buf + pos, sizeof(data_buf) - (size_t)pos,
+        int w = snprintf(data_buf + pos, sizeof(data_buf) - (size_t)pos,
                         i == 0 ? "%.6f" : ",%.6f", (double)raw[i]);
+        if (w > 0 && (size_t)(pos + w) < sizeof(data_buf)) pos += w;
     }
 
     char score_out[32];
@@ -559,54 +561,60 @@ static void handle_data_reject(compat_socket_t fd, const char *body)
 static void handle_data_quarantine(compat_socket_t fd)
 {
     static char buf[16384];
-    int pos = 0;
+    int pos = 0, n;
     int sz = (int)sizeof(buf);
 
-    pos += snprintf(buf + pos, (size_t)(sz - pos), "[");
+    n = snprintf(buf, (size_t)sz, "[");
+    if (n > 0 && n < sz) pos = n;
 
     int first = 1;
     for (int i = 0; i < g_quarantine_count; i++) {
         if (g_quarantine[i].status != QUARANTINE_PENDING) continue;
         if (!first) {
-            pos += snprintf(buf + pos, (size_t)(sz - pos), ",");
+            n = snprintf(buf + pos, (size_t)(sz - pos), ",");
+            if (n > 0 && pos + n < sz) pos += n;
         }
         first = 0;
-        pos += snprintf(buf + pos, (size_t)(sz - pos),
+        n = snprintf(buf + pos, (size_t)(sz - pos),
                         "{\"hash\":\"%s\",\"name\":\"%s\","
                         "\"author\":\"%s\",\"submitted_at\":%ld}",
                         g_quarantine[i].hash,
                         g_quarantine[i].name,
                         g_quarantine[i].author,
                         (long)g_quarantine[i].submitted_at);
+        if (n > 0 && pos + n < sz) pos += n;
         if (pos >= sz - 64) break; /* prevent overflow */
     }
 
-    pos += snprintf(buf + pos, (size_t)(sz - pos), "]");
+    snprintf(buf + pos, (size_t)(sz - pos), "]");
     http_respond(fd, 200, buf);
 }
 
 static void handle_data_pool(compat_socket_t fd)
 {
     static char buf[8192];
-    int pos = 0;
+    int pos = 0, n;
     int sz = (int)sizeof(buf);
 
-    pos += snprintf(buf + pos, (size_t)(sz - pos), "[");
+    n = snprintf(buf, (size_t)sz, "[");
+    if (n > 0 && n < sz) pos = n;
 
     for (int i = 0; i < g_data_names_count; i++) {
         if (i > 0) {
-            pos += snprintf(buf + pos, (size_t)(sz - pos), ",");
+            n = snprintf(buf + pos, (size_t)(sz - pos), ",");
+            if (n > 0 && pos + n < sz) pos += n;
         }
-        pos += snprintf(buf + pos, (size_t)(sz - pos),
+        n = snprintf(buf + pos, (size_t)(sz - pos),
                         "{\"name\":\"%s\",\"hash\":\"%s\","
                         "\"object_url\":\"/objects/%s\"}",
                         g_data_names[i].name,
                         g_data_names[i].hash,
                         g_data_names[i].hash);
+        if (n > 0 && pos + n < sz) pos += n;
         if (pos >= sz - 128) break;
     }
 
-    pos += snprintf(buf + pos, (size_t)(sz - pos), "]");
+    snprintf(buf + pos, (size_t)(sz - pos), "]");
     http_respond(fd, 200, buf);
 }
 
