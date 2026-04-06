@@ -95,10 +95,13 @@
 
 #ifdef COMPAT_WINDOWS
   #include <direct.h>
+  #include <process.h>
   /* MinGW and MSVC mkdir() has no mode parameter */
   #define compat_mkdir(path, mode) _mkdir(path)
+  #define compat_getpid() _getpid()
 #else
   #define compat_mkdir(path, mode) mkdir(path, mode)
+  #define compat_getpid() getpid()
 #endif
 
 /* ── Signals ────────────────────────────────────────────────────────────── */

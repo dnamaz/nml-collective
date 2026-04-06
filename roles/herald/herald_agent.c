@@ -745,6 +745,8 @@ static void handle_list(compat_socket_t fd)
         long ttl_remaining = (g_creds[i].expires_at > 0)
                              ? (long)(g_creds[i].expires_at - now)
                              : -1;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
         snprintf(entry, sizeof(entry),
                  "%s{\"agent\":\"%s\",\"role\":\"%s\","
                  "\"issued_at\":%ld,\"ttl_remaining\":%ld}",
@@ -753,6 +755,7 @@ static void handle_list(compat_socket_t fd)
                  g_creds[i].role,
                  (long)g_creds[i].issued_at,
                  ttl_remaining);
+#pragma GCC diagnostic pop
         int entry_len = (int)strlen(entry);
         if (pos + entry_len + 2 < (int)sizeof(body)) {
             memcpy(body + pos, entry, (size_t)entry_len);
@@ -980,7 +983,7 @@ int main(int argc, char *argv[])
     compat_winsock_init();
 
     /* Seed RNG for auto-generated passwords */
-    srand((unsigned int)(time(NULL) ^ (unsigned long)getpid()));
+    srand((unsigned int)(time(NULL) ^ (unsigned long)compat_getpid()));
 
     /* build derived paths */
     snprintf(g_conf_file,   sizeof(g_conf_file),   "%s/mosquitto.conf", g_config_dir);
