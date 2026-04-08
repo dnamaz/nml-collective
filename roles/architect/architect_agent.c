@@ -395,21 +395,67 @@ static int generate_from_template(const char *intent,
 
 /* ── Validation ──────────────────────────────────────────────────────── */
 
+#define MAX_RETRIES 3
+
 /*
  * Validate compact NML by expanding and doing a dry-run with no data.
  * Returns 1 if the program assembles without error, 0 otherwise.
+ * If err_out is non-NULL, writes the error message on failure.
  */
 static int validate_compact(const char *compact)
 {
     char program_text[NML_MAX_PROGRAM_LEN + 1];
     if (msg_compact_to_program(compact, program_text, sizeof(program_text)) < 0)
         return 0;
-
-    /* Assembly-only validation: do NOT call vm_execute here.
-     * Generated programs reference named-memory tensors (weights, input data)
-     * that are only available at worker runtime — executing without them
-     * segfaults on the first tensor operation (MMUL, MADD, etc.). */
     return nml_exec_validate(program_text);
+}
+
+static int validate_compact_msg(const char *compact,
+                                char *err_out, size_t err_sz)
+{
+    if (err_out && err_sz > 0) err_out[0] = '\0';
+
+    char program_text[NML_MAX_PROGRAM_LEN + 1];
+    if (msg_compact_to_program(compact, program_text, sizeof(program_text)) < 0) {
+        if (err_out && err_sz > 0)
+            snprintf(err_out, err_sz, "Failed to expand compact format");
+        return 0;
+    }
+    return nml_exec_validate_msg(program_text, err_out, err_sz);
+}
+
+/*
+ * Build an opcode-help string for common backward ops so the LLM can
+ * self-correct operand count errors.  Appended to the correction prompt.
+ */
+static void opcode_help_for_error(const char *error, char *help, size_t sz)
+{
+    help[0] = '\0';
+    /* Inject help for operand errors, unknown opcodes, or slot errors */
+    if (!strstr(error, "operand") && !strstr(error, "expects")
+        && !strstr(error, "Unknown")  && !strstr(error, "not found")
+        && !strstr(error, "error"))
+        return;
+
+    snprintf(help, sz,
+        "\nCorrect operand counts for backward opcodes:\n"
+        "  RELUBK  Rd Rgrad Rinput              (3 operands)\n"
+        "  SIGMBK  Rd Rgrad Rinput              (3 operands)\n"
+        "  TANHBK  Rd Rgrad Rinput              (3 operands)\n"
+        "  GELUBK  Rd Rgrad Rinput              (3 operands)\n"
+        "  SOFTBK  Rd Rgrad Rinput              (3 operands)\n"
+        "  NORMBK  Rd Rgrad Rinput              (3 operands)\n"
+        "  MMULBK  Rd_di Rd_dw Rgrad Rin Rw     (5 operands)\n"
+        "  CONVBK  Rd_di Rd_dk Rgrad Rin Rk     (5 operands)\n"
+        "  POOLBK  Rd Rgrad Rinput              (3 operands)\n"
+        "  ATTNBK  Rd_dq Rgrad Rq Rk Rv        (5 operands)\n"
+        "\nOther common opcodes:\n"
+        "  SSUB  Rd Rs #imm     — scalar subtract\n"
+        "  SDIV  Rd Rs #imm     — scalar divide\n"
+        "  CLMP  Rd Rs #min #max — clamp values\n"
+        "  WHER  Rd Rcond Rs1 [Rs2] — conditional select\n"
+        "  SYS   Rd #code       — system call (0=print,1=char,2=read,4=time,5=rand)\n"
+        "  BKWD  Rd Rpred Rtarget [#loss_type] — full backward pass\n");
 }
 
 /* ── Program submission ──────────────────────────────────────────────── */
@@ -474,6 +520,7 @@ static void handle_spec(const char *sender, const char *payload)
     int  template_id = -1;
     int  provenance  = PROV_TEMPLATE;
     int  generated   = 0;
+    int  retries_used = 0;
     TemplateParams last_params;
     memset(&last_params, 0, sizeof(last_params));
 
@@ -486,7 +533,7 @@ static void handle_spec(const char *sender, const char *payload)
                last_params.training_mode ? "train+infer" : "infer");
     }
 
-    /* Fallback: three-stage pipeline (external → think → code) */
+    /* Fallback: three-stage pipeline (external → think → code) with retry */
     if (!generated && (g_llm_host[0] != '\0' || g_code_host[0] != '\0')) {
         char context[512] = {0};
 
@@ -525,31 +572,77 @@ static void handle_spec(const char *sender, const char *payload)
             enriched[sizeof(enriched) - 1] = '\0';
         }
 
-        /* Stage 3: Code model generates NML (local if set, else external) */
-        int ok = g_code_host[0] != '\0'
-            ? code_generate(enriched, compact, sizeof(compact))
-            : llm_generate(enriched, compact, sizeof(compact));
+        /* Stage 3: Code model generates NML with validation retry loop */
+        char error_msg[512] = {0};
+        int  retry;
 
-        if (ok > 0) {
-            generated  = 1;
-            provenance = PROV_LLM;
-            const char *stages = (g_code_host[0] && g_think_host[0] && g_llm_host[0])
-                ? "external+think+code"
-                : (g_code_host[0] && g_think_host[0]) ? "think+code"
-                : (g_code_host[0]) ? "code-only"
-                : (think_out[0]) ? "think+llm" : "llm-only";
-            printf("[architect] generated program (%s)\n", stages);
+        for (retry = 0; retry < MAX_RETRIES; retry++) {
+            int ok;
+
+            if (retry == 0) {
+                /* First attempt: use enriched spec */
+                ok = g_code_host[0] != '\0'
+                    ? code_generate(enriched, compact, sizeof(compact))
+                    : llm_generate(enriched, compact, sizeof(compact));
+            } else {
+                /* Retry: include error + opcode schemas in correction prompt */
+                char help[1024] = {0};
+                opcode_help_for_error(error_msg, help, sizeof(help));
+                char correction[NML_MAX_PROGRAM_LEN + 1];
+                snprintf(correction, sizeof(correction),
+                    "Previous NML had errors. Fix them.\n"
+                    "Error: %.400s\n%s\n"
+                    "Original intent: %.200s\n"
+                    "Output only corrected NML program lines.",
+                    error_msg, help, intent);
+                ok = g_code_host[0] != '\0'
+                    ? code_generate(correction, compact, sizeof(compact))
+                    : llm_generate(correction, compact, sizeof(compact));
+            }
+
+            if (ok <= 0) {
+                fprintf(stderr, "[architect] code generation failed on attempt %d\n",
+                        retry + 1);
+                continue;
+            }
+
+            /* Validate */
+            error_msg[0] = '\0';
+            int valid = validate_compact_msg(compact, error_msg, sizeof(error_msg));
+            if (valid) {
+                generated  = 1;
+                provenance = PROV_LLM;
+                const char *stages = (g_code_host[0] && g_think_host[0] && g_llm_host[0])
+                    ? "external+think+code"
+                    : (g_code_host[0] && g_think_host[0]) ? "think+code"
+                    : (g_code_host[0]) ? "code-only"
+                    : (think_out[0]) ? "think+llm" : "llm-only";
+                retries_used = retry;
+                if (retry == 0) {
+                    printf("[architect] generated program (%s)\n", stages);
+                } else {
+                    printf("[architect] generated program (%s, fixed on retry %d)\n",
+                           stages, retry);
+                }
+                break;
+            }
+
+            printf("[architect] validation failed (attempt %d/%d): %s\n",
+                   retry + 1, MAX_RETRIES, error_msg);
         }
     }
 
     if (!generated) {
         fprintf(stderr,
-                "[architect] no template match and no LLM — skipping spec\n");
+                "[architect] no template match and LLM failed after %d retries — "
+                "skipping spec\n", MAX_RETRIES);
         return;
     }
 
-    /* Validate by dry-run */
-    int valid = validate_compact(compact);
+    /* Final validation (templates bypass the retry loop, so validate here) */
+    int valid = (provenance == PROV_TEMPLATE)
+        ? validate_compact(compact)
+        : 1;  /* LLM path already validated in the loop above */
     if (!valid) {
         fprintf(stderr, "[architect] dry-run validation FAILED — dropping\n");
         return;
@@ -567,10 +660,12 @@ static void handle_spec(const char *sender, const char *payload)
     printf("[architect] submitted program phash=%.16s  prov=%s  valid=%d\n",
            phash, provenance == PROV_TEMPLATE ? "template" : "llm", valid);
 
-    /* Governance vote: confidence based on generation provenance + validation.
-     * template=1.0 (deterministic), llm+valid=0.9, llm+unvalidated=0.6 */
+    /* Governance vote: confidence based on provenance + validation + retries.
+     * template=1.0, llm+first-pass=0.9, llm+retried=0.8, llm+unvalidated=0.6 */
     float vote_score = (provenance == PROV_TEMPLATE) ? 1.0f
-                     : (valid ? 0.9f : 0.6f);
+                     : (valid && retries_used == 0) ? 0.9f
+                     : (valid && retries_used > 0)  ? 0.8f
+                     : 0.6f;
     publish_vote(phash, vote_score);
 }
 

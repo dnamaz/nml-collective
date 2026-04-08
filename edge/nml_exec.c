@@ -91,15 +91,51 @@ int nml_exec_run(const char *program_body, const char *data,
 
 int nml_exec_validate(const char *program_body)
 {
+    return nml_exec_validate_msg(program_body, NULL, 0);
+}
+
+int nml_exec_validate_msg(const char *program_body,
+                          char *err_out, size_t err_sz)
+{
+    if (err_out && err_sz > 0) err_out[0] = '\0';
+
     VM *vm = (VM *)calloc(1, sizeof(VM));
-    if (!vm) return 0;
+    if (!vm) {
+        if (err_out && err_sz > 0)
+            snprintf(err_out, err_sz, "VM allocation failed");
+        return 0;
+    }
     vm_init(vm);
     vm->max_cycles = NML_MAX_CYCLES;
-    int ok = (vm_assemble(vm, program_body) >= 0 &&
-              vm_validate(vm) == NML_OK);
+
+    int ninstr = vm_assemble(vm, program_body);
+    if (ninstr < 0) {
+        if (err_out && err_sz > 0) {
+            if (vm->error_msg[0])
+                snprintf(err_out, err_sz, "Assembly error: %s", vm->error_msg);
+            else
+                snprintf(err_out, err_sz, "Assembly failed (code %d)", ninstr);
+        }
+        vm_cleanup(vm);
+        free(vm);
+        return 0;
+    }
+
+    if (vm_validate(vm) != NML_OK) {
+        if (err_out && err_sz > 0) {
+            if (vm->error_msg[0])
+                snprintf(err_out, err_sz, "Validation error: %s", vm->error_msg);
+            else
+                snprintf(err_out, err_sz, "Validation failed");
+        }
+        vm_cleanup(vm);
+        free(vm);
+        return 0;
+    }
+
     vm_cleanup(vm);
     free(vm);
-    return ok ? 1 : 0;
+    return 1;
 }
 
 /* ── Stateful VM API ──────────────────────────────────────────────────── */

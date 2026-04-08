@@ -38,6 +38,15 @@ int nml_exec_run(const char *program_body, const char *data,
  */
 int nml_exec_validate(const char *program_body);
 
+/*
+ * Assembly-only validation with error message capture.
+ * Like nml_exec_validate() but writes the error description to err_out
+ * on failure (up to err_sz bytes).  err_out is set to "" on success.
+ * Returns 1 on success, 0 on error.
+ */
+int nml_exec_validate_msg(const char *program_body,
+                          char *err_out, size_t err_sz);
+
 /* ── Stateful VM API (Phase 3B streaming execution) ───────────────────── */
 
 /*
