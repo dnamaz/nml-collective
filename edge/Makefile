@@ -63,7 +63,8 @@ ALL_OBJS := $(EDGE_OBJS) $(NML_EXEC_OBJ) $(TWEETNACL_OBJ)
 
 COLLECTIVE_SRCS := udp.c msg.c crypto.c report.c identity.c \
                    peer_table.c vote.c program_send.c http_client.c \
-                   templates.c mqtt_transport.c storage.c
+                   templates.c mqtt_transport.c storage.c chain.c \
+                   http_util.c ledger_http.c
 COLLECTIVE_OBJS := $(COLLECTIVE_SRCS:.c=.o)
 
 # Vendored MQTT-C library (MIT license)
@@ -231,6 +232,16 @@ mqtt_transport.o: mqtt_transport.c mqtt_transport.h mqtt/mqtt.h msg.h
 # storage.c: uses nml_crypto.h for SHA-256
 storage.o: storage.c storage.h
 	$(CC) $(CFLAGS) -Wno-unused-function -c -o $@ $<
+
+# chain.c: uses nml_crypto.h for SHA-256
+chain.o: chain.c chain.h
+	$(CC) $(CFLAGS) -Wno-unused-function -c -o $@ $<
+
+# http_util.c: socket-heavy, depends on compat.h
+http_util.o: http_util.c http_util.h compat.h
+
+# ledger_http.c: depends on chain.c + http_util
+ledger_http.o: ledger_http.c ledger_http.h http_util.h chain.h
 
 # Vendored MQTT-C (suppress all warnings)
 mqtt/mqtt.o: mqtt/mqtt.c mqtt/mqtt.h mqtt/mqtt_pal.h

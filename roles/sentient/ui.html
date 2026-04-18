@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Sentient</title>
+<style>
+:root {
+  --accent: #58a6ff;
+  --accent-dim: #1f6feb;
+  --warn: #d29922;
+  --ok: #3fb950;
+  --bad: #da3633;
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #21262d;
+  --fg: #c9d1d9;
+  --muted: #8b949e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg); color: var(--fg); line-height: 1.5;
+}
+header {
+  padding: 20px 32px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  background: linear-gradient(90deg, rgba(88,166,255,0.12), transparent);
+}
+h1 { margin: 0; font-size: 18px; font-weight: 600; }
+h1 .tag {
+  background: var(--accent); color: white; padding: 3px 10px;
+  border-radius: 3px; font-size: 11px; letter-spacing: 0.12em; margin-right: 10px;
+}
+.stats { font-size: 13px; color: var(--muted); }
+.stats strong { color: var(--fg); }
+.dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok); margin-right: 6px; vertical-align: middle;
+}
+.dot.off { background: var(--warn); }
+main { padding: 24px 32px; max-width: 1100px; margin: 0 auto; }
+section {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 20px; margin-bottom: 16px;
+}
+.h2row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+h2 {
+  margin: 0; font-size: 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;
+}
+.item {
+  padding: 12px 14px; border-left: 3px solid var(--muted);
+  margin-bottom: 8px; background: var(--bg); border-radius: 0 4px 4px 0;
+}
+.item.pending { border-left-color: var(--warn); }
+.item.approved { border-left-color: var(--ok); }
+.item.rejected { border-left-color: var(--bad); opacity: 0.7; }
+.ihead { display: flex; justify-content: space-between; align-items: center; }
+.iname { font-weight: 600; font-family: ui-monospace, monospace; font-size: 13px; }
+.imeta { color: var(--muted); font-size: 12px; margin-top: 4px; font-family: ui-monospace, monospace; }
+.badge {
+  padding: 2px 8px; border-radius: 3px; font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
+}
+.badge.p { background: var(--warn); color: black; }
+.badge.a { background: var(--ok); color: black; }
+.badge.r { background: var(--bad); color: white; }
+.row2 { margin-top: 8px; display: flex; gap: 6px; }
+button {
+  background: var(--border); color: var(--fg); border: 1px solid #30363d;
+  padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
+  font-family: inherit;
+}
+button:hover { background: #30363d; }
+button.primary { background: var(--ok); border-color: var(--ok); color: black; }
+button.primary:hover { background: #4cc567; }
+button.danger { background: var(--bad); border-color: var(--bad); color: white; }
+button.danger:hover { background: #f04040; }
+button.small { padding: 3px 10px; font-size: 12px; }
+input {
+  background: var(--bg); color: var(--fg); border: 1px solid #30363d;
+  padding: 7px 10px; border-radius: 4px; font-size: 13px; font-family: inherit;
+}
+input:focus { outline: none; border-color: var(--accent); }
+.peer {
+  display: inline-block; margin-right: 16px;
+  font-family: ui-monospace, monospace; font-size: 13px;
+}
+.empty { color: var(--muted); font-style: italic; padding: 16px; text-align: center; }
+footer { text-align: center; color: var(--muted); font-size: 11px; padding: 16px; }
+.nav a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.nav a:hover { color: var(--fg); }
+.ledger-status { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); }
+.ledger-status.ok { color: var(--ok); }
+.ledger-status.bad { color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class='tag'>SENTIENT</span><span id='name'>loading&hellip;</span></h1>
+  <div class='stats'><span class='dot' id='dot'></span><span id='stats'></span></div>
+</header>
+<main>
+  <section>
+    <div class='h2row'>
+      <h2>Quarantine Queue</h2>
+      <span class='ledger-status' id='qcount'>&mdash;</span>
+    </div>
+    <div id='quarantine'></div>
+  </section>
+  <section>
+    <div class='h2row'>
+      <h2>Data Pool (Approved)</h2>
+      <span class='ledger-status' id='pcount'>&mdash;</span>
+    </div>
+    <div id='pool'></div>
+  </section>
+  <section>
+    <div class='h2row'>
+      <h2>Transaction Ledger</h2>
+      <button class='small' id='btn-verify'>Verify Chain</button>
+    </div>
+    <div class='ledger-status' id='ledger'>click Verify Chain to check integrity</div>
+  </section>
+  <section>
+    <h2>Peers</h2>
+    <div id='peers'></div>
+  </section>
+</main>
+<footer>
+  <div class='nav'>
+    role: sentient &middot; endpoints:
+    <a href='/health'>/health</a> &middot;
+    <a href='/data/quarantine'>/data/quarantine</a> &middot;
+    <a href='/data/pool'>/data/pool</a> &middot;
+    <a href='/ledger'>/ledger</a>
+  </div>
+  <div id='footer'>idle</div>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const get = (p) => fetch(p).then(r => r.json());
+const post = (p, b) => fetch(p, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(b),
+}).then(r => r.json());
+
+const escMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
+escMap[String.fromCharCode(34)] = '&quot;';
+escMap[String.fromCharCode(39)] = '&#39;';
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>'"]/g, (c) => escMap[c]);
+
+const badge = (s) => ({ pending: 'p', approved: 'a', rejected: 'r' })[s] || 'p';
+
+async function renderHealth() {
+  const h = await get('/health');
+  $('name').textContent = h.name || 'sentient';
+}
+
+async function renderQuarantine() {
+  const list = await get('/data/quarantine');
+  const items = Array.isArray(list) ? list : [];
+  const pending = items.filter((x) => x.status === 'pending');
+  $('qcount').textContent = pending.length + ' pending / ' + items.length + ' total';
+  const host = $('quarantine');
+  $('dot').classList.toggle('off', pending.length > 0);
+  if (!items.length) {
+    host.innerHTML = '<div class=\'empty\'>No items in quarantine.</div>';
+    return;
+  }
+  host.innerHTML = items.map((it) => {
+    const s = it.status || 'pending';
+    const cls = s === 'approved' ? 'approved' : s === 'rejected' ? 'rejected' : 'pending';
+    const actions = (s === 'pending')
+      ? '<button class=\'primary small\' data-action=\'approve\' data-hash=\'' + esc(it.hash) + '\'>Approve</button>' +
+        ' <button class=\'danger small\' data-action=\'reject\' data-hash=\'' + esc(it.hash) + '\'>Reject</button>'
+      : '';
+    return '<div class=\'item ' + cls + '\'>' +
+      '<div class=\'ihead\'>' +
+        '<span class=\'iname\'>' + esc(it.name || '(unnamed)') + '</span>' +
+        '<span class=\'badge ' + badge(s) + '\'>' + esc(s) + '</span>' +
+      '</div>' +
+      '<div class=\'imeta\'>hash ' + esc(it.hash) +
+        ' &middot; by ' + esc(it.author || '?') +
+        (it.reason ? ' &middot; ' + esc(it.reason) : '') +
+      '</div>' +
+      (actions ? '<div class=\'row2\'>' + actions + '</div>' : '') +
+    '</div>';
+  }).join('');
+}
+
+async function renderPool() {
+  const list = await get('/data/pool');
+  const items = Array.isArray(list) ? list : [];
+  $('pcount').textContent = items.length + ' approved';
+  const host = $('pool');
+  if (!items.length) {
+    host.innerHTML = '<div class=\'empty\'>Data pool empty.</div>';
+    return;
+  }
+  host.innerHTML = items.slice(0, 50).map((it) =>
+    '<div class=\'item approved\'>' +
+      '<div class=\'iname\'>' + esc(it.name || it.hash || '?') + '</div>' +
+      '<div class=\'imeta\'>hash ' + esc(it.hash || '?') +
+        (it.n_samples ? ' &middot; ' + it.n_samples + ' samples' : '') +
+      '</div>' +
+    '</div>'
+  ).join('');
+}
+
+async function renderPeers() {
+  try {
+    const peers = await get('/peers');
+    const list = Array.isArray(peers) ? peers : (peers.peers || []);
+    const host = $('peers');
+    if (!list.length) {
+      host.innerHTML = '<div class=\'empty\'>No peers seen yet.</div>';
+      return;
+    }
+    host.innerHTML = list.map((p) =>
+      '<span class=\'peer\'>' + esc(p.name || p) + '</span>'
+    ).join('');
+  } catch (e) {
+    $('peers').innerHTML = '<div class=\'empty\'>(no /peers endpoint)</div>';
+  }
+}
+
+async function refreshAll() {
+  try {
+    await Promise.all([renderHealth(), renderQuarantine(), renderPool(), renderPeers()]);
+    const stats = $('stats');
+    const qc = $('qcount').textContent;
+    stats.innerHTML = qc;
+    $('footer').textContent = 'refreshed ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('footer').textContent = 'error: ' + e.message;
+  }
+}
+
+async function verifyChain() {
+  $('ledger').textContent = 'verifying&hellip;';
+  $('ledger').className = 'ledger-status';
+  try {
+    const r = await get('/ledger/verify');
+    if (r.ok) {
+      $('ledger').textContent = 'chain OK — ' + r.total + ' records verified';
+      $('ledger').className = 'ledger-status ok';
+    } else {
+      $('ledger').textContent = 'CORRUPT at tx_id=' + r.bad_tx_id;
+      $('ledger').className = 'ledger-status bad';
+    }
+  } catch (e) {
+    $('ledger').textContent = 'error: ' + e.message;
+    $('ledger').className = 'ledger-status bad';
+  }
+}
+
+async function doApprove(hash) {
+  const r = await post('/data/approve', { hash });
+  if (r.error) alert(r.error); else refreshAll();
+}
+
+async function doReject(hash) {
+  const reason = prompt('Rejection reason (optional):') || '';
+  const r = await post('/data/reject', { hash, reason });
+  if (r.error) alert(r.error); else refreshAll();
+}
+
+$('btn-verify').addEventListener('click', verifyChain);
+$('quarantine').addEventListener('click', (e) => {
+  const a = e.target.dataset.action;
+  const h = e.target.dataset.hash;
+  if (!a) return;
+  if (a === 'approve') doApprove(h);
+  else if (a === 'reject') doReject(h);
+});
+
+refreshAll();
+setInterval(refreshAll, 4000);
+</script>
+</body>
+</html>

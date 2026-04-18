@@ -25,6 +25,17 @@
 #include "../../edge/vote.h"
 #include "../../edge/mqtt_transport.h"
 #include "../../edge/storage.h"
+#include "../../edge/chain.h"
+#include "../../edge/http_util.h"
+#include "../../edge/ledger_http.h"
+
+/* Embedded landing page, generated from ui.html via `xxd -i`. */
+#include "ui.html.h"
+
+/* Shared helpers live in edge/http_util.c; keep the local call-site names. */
+#define http_respond       http_send_json
+#define http_respond_html  http_send_html
+#define json_str           http_json_str
 #include "../../edge/http_client.h"
 #include "../../edge/nml_exec.h"
 
@@ -84,6 +95,7 @@ static char    g_identity_payload[34];
 static MQTTTransport g_mqtt;
 static PeerTable     g_peers;
 static VoteTable     g_votes;
+static Chain         g_chain;
 
 static QuarantineEntry g_quarantine[MAX_QUARANTINE];
 static int             g_quarantine_count = 0;
@@ -102,80 +114,7 @@ static char g_herald_host[128]   = "127.0.0.1";
 static uint16_t g_herald_port    = 7780;
 static int g_quorum              = 1;
 
-/* ── HTTP server helpers ─────────────────────────────────────────────── */
-
-static int json_str(const char *json, const char *key,
-                    char *out_buf, size_t out_sz)
-{
-    if (!json || !key || !out_buf || out_sz == 0) {
-        return -1;
-    }
-
-    char needle[JSON_VAL_SZ];
-    snprintf(needle, sizeof(needle), "\"%s\"", key);
-
-    const char *p = strstr(json, needle);
-    if (!p) {
-        return -1;
-    }
-    p += strlen(needle);
-
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
-    if (*p != ':') {
-        return -1;
-    }
-    p++;
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
-
-    if (*p != '"') {
-        return -1;
-    }
-    p++;
-
-    size_t written = 0;
-    while (*p && *p != '"') {
-        if (written < out_sz - 1) {
-            out_buf[written++] = *p;
-        }
-        p++;
-    }
-    out_buf[written] = '\0';
-
-    if (*p != '"') {
-        return -1;
-    }
-    return 0;
-}
-
-static void http_respond(compat_socket_t fd, int status, const char *body)
-{
-    const char *status_str;
-    switch (status) {
-    case 200: status_str = "OK";                    break;
-    case 400: status_str = "Bad Request";           break;
-    case 404: status_str = "Not Found";             break;
-    case 405: status_str = "Method Not Allowed";    break;
-    default:  status_str = "Internal Server Error"; break;
-    }
-
-    size_t body_len = body ? strlen(body) : 0;
-
-    char header[512];
-    snprintf(header, sizeof(header),
-             "HTTP/1.0 %d %s\r\n"
-             "Content-Type: application/json\r\n"
-             "Content-Length: %zu\r\n"
-             "Access-Control-Allow-Origin: *\r\n"
-             "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
-             "Connection: close\r\n"
-             "\r\n",
-             status, status_str, body_len);
-
-    send(fd, header, strlen(header), 0);
-    if (body && body_len > 0) {
-        send(fd, body, body_len, 0);
-    }
-}
+/* json_str + http_respond + http_respond_html live in edge/http_util.c */
 
 /* ── Core collective functions ───────────────────────────────────────── */
 
@@ -309,6 +248,10 @@ static void handle_result(const char *peer_name, const char *payload)
 }
 
 /* ── HTTP request handlers ───────────────────────────────────────────── */
+
+/* /ledger and /ledger/verify are served by edge/ledger_http.c helpers —
+ * see ledger_http_serve_index() and ledger_http_serve_verify() in the
+ * dispatcher below. */
 
 static void handle_health(compat_socket_t fd)
 {
@@ -448,6 +391,16 @@ static void handle_data_submit(compat_socket_t fd, const char *body)
     qe->reason[0]    = '\0';
     qe->submitted_at = time(NULL);
 
+    /* Record the submission in the transaction chain */
+    {
+        char chain_payload[256];
+        int cp_len = snprintf(chain_payload, sizeof(chain_payload),
+            "{\"hash\":\"%s\",\"name\":\"%s\",\"author\":\"%s\"}",
+            hash_out, name, author);
+        chain_append(&g_chain, CHAIN_TX_DATA_SUBMIT,
+                     chain_payload, (size_t)cp_len);
+    }
+
     char resp[256];
     snprintf(resp, sizeof(resp),
              "{\"hash\":\"%s\",\"status\":\"pending\","
@@ -499,6 +452,15 @@ static void handle_data_approve(compat_socket_t fd, const char *body)
                  "%s", hash);
     }
 
+    /* Record approval in the transaction chain */
+    {
+        char chain_payload[64];
+        int cp_len = snprintf(chain_payload, sizeof(chain_payload),
+                              "{\"hash\":\"%s\"}", hash);
+        chain_append(&g_chain, CHAIN_TX_DATA_APPROVE,
+                     chain_payload, (size_t)cp_len);
+    }
+
     /* Broadcast approval over MQTT so custodian updates its state */
     char mqtt_body[128];
     int mlen = snprintf(mqtt_body, sizeof(mqtt_body),
@@ -538,6 +500,16 @@ static void handle_data_reject(compat_socket_t fd, const char *body)
     }
 
     g_quarantine[found].status = QUARANTINE_REJECTED;
+
+    /* Record rejection in the transaction chain */
+    {
+        char chain_payload[192];
+        int cp_len = snprintf(chain_payload, sizeof(chain_payload),
+            "{\"hash\":\"%s\",\"reason\":\"%s\"}",
+            hash, reason);
+        chain_append(&g_chain, CHAIN_TX_DATA_REJECT,
+                     chain_payload, (size_t)cp_len);
+    }
 
     /* Broadcast rejection over MQTT so custodian updates its state */
     char mqtt_body[192];
@@ -743,7 +715,10 @@ static void http_serve_once(compat_socket_t server_fd)
     }
 
     /* dispatch */
-    if (strcmp(method, "GET") == 0 && strcmp(path_only, "/health") == 0) {
+    if (strcmp(method, "GET") == 0 && strcmp(path_only, "/") == 0) {
+        http_respond_html(client_fd, (const char *)ui_html, (size_t)ui_html_len);
+
+    } else if (strcmp(method, "GET") == 0 && strcmp(path_only, "/health") == 0) {
         handle_health(client_fd);
 
     } else if (strcmp(method, "GET") == 0 &&
@@ -775,6 +750,14 @@ static void http_serve_once(compat_socket_t server_fd)
     } else if (strcmp(method, "GET") == 0 &&
                strcmp(path_only, "/data/pool") == 0) {
         handle_data_pool(client_fd);
+
+    } else if (strcmp(method, "GET") == 0 &&
+               strcmp(path_only, "/ledger/verify") == 0) {
+        ledger_http_serve_verify(client_fd, &g_chain);
+
+    } else if (strcmp(method, "GET") == 0 &&
+               strcmp(path_only, "/ledger") == 0) {
+        ledger_http_serve_index(client_fd, &g_chain, query);
 
     } else if (strcmp(method, "OPTIONS") == 0) {
         http_respond(client_fd, 200, "{}");
@@ -926,6 +909,18 @@ int main(int argc, char *argv[])
 #ifdef SIGPIPE
     signal(SIGPIPE, SIG_IGN);
 #endif
+
+    /* 4b. Transaction chain — must succeed before we accept submissions */
+    if (chain_open(g_data_dir, g_agent_name, &g_chain) != 0) {
+        fprintf(stderr,
+                "[%s] chain_open failed — refusing to start. "
+                "Inspect or remove %s/agents/%s/chain.binlog.\n",
+                g_agent_name, g_data_dir, g_agent_name);
+        return 1;
+    }
+    printf("[%s] chain  path=%s  next_tx_id=%llu\n",
+           g_agent_name, g_chain.path,
+           (unsigned long long)g_chain.next_tx_id);
 
     /* 5. Connect to MQTT broker */
     if (mqtt_transport_init(&g_mqtt, g_broker_host, g_broker_port,
@@ -1079,6 +1074,7 @@ int main(int argc, char *argv[])
     printf("[%s] shutting down\n", g_agent_name);
     compat_close_socket(server_fd);
     mqtt_transport_close(&g_mqtt);
+    chain_close(&g_chain);
     compat_winsock_cleanup();
     return 0;
 }

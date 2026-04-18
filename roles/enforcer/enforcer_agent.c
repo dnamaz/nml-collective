@@ -34,6 +34,7 @@
 #include "../../edge/identity.h"
 #include "../../edge/peer_table.h"
 #include "../../edge/mqtt_transport.h"
+#include "../../edge/http_util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,6 +42,14 @@
 #include <math.h>
 #include <time.h>
 #include "compat.h"
+
+/* Embedded landing page — generated at build time from ui.html via xxd -i.
+ * Exposes `ui_html[]` (raw bytes, not NUL-terminated) and `ui_html_len`. */
+#include "ui.html.h"
+
+/* Preserve existing call-site names while using the shared edge helpers. */
+#define http_send  http_send_json
+#define json_str   http_json_str
 
 /* ── Tunables ────────────────────────────────────────────────────────── */
 
@@ -56,6 +65,9 @@
 #define MAX_THREAT_ENTRIES      64
 #define MAX_EVIDENCE            16
 #define MAX_IDENTITY_BINDINGS   64
+
+#define HTTP_BUF_SZ             (16 * 1024)
+#define HTTP_MAX_BODY_SZ        (64 * 1024)
 
 /* ── Data structures ─────────────────────────────────────────────────── */
 
@@ -130,6 +142,8 @@ static UDPContext    g_udp;
 
 static const char   *g_agent_name;
 static uint16_t      g_agent_port;
+
+static compat_socket_t g_http_fd = COMPAT_INVALID_SOCKET;
 
 /* ── ThreatTable helpers ─────────────────────────────────────────────── */
 
@@ -528,6 +542,279 @@ static void monitor_pass(time_t now)
     peer_sweep(&g_peers, now, HEARTBEAT_INTERVAL * 6);
 }
 
+/* ── HTTP response body builders ─────────────────────────────────────── */
+
+static void threats_to_json(char *out, size_t out_sz)
+{
+    int pos = snprintf(out, out_sz, "[");
+    int first = 1;
+    for (int i = 0; i < g_threats.count; i++) {
+        const ThreatEntry *e = &g_threats.entries[i];
+        if (!e->active) continue;
+        const char *status = e->blacklisted  ? "blacklisted"
+                           : e->quarantined  ? "quarantined"
+                           : e->warn_count   ? "warning"
+                                             : "clean";
+        if (!first && (size_t)pos < out_sz)
+            pos += snprintf(out + pos, out_sz - (size_t)pos, ",");
+        first = 0;
+        if ((size_t)pos < out_sz) {
+            pos += snprintf(out + pos, out_sz - (size_t)pos,
+                "{\"name\":\"%s\",\"status\":\"%s\","
+                 "\"warnings\":%d,\"evidence\":%d,"
+                 "\"quarantine_expires\":%ld,"
+                 "\"reason\":\"%s\"}",
+                e->name, status, e->warn_count, e->evidence_n,
+                (long)e->quarantine_expires,
+                e->quarantined ? e->quarantine_reason :
+                e->blacklisted ? e->blacklist_reason  : "");
+        }
+    }
+    if ((size_t)pos < out_sz)
+        snprintf(out + pos, out_sz - (size_t)pos, "]");
+}
+
+static void evidence_to_json(const ThreatEntry *e,
+                             char *out, size_t out_sz)
+{
+    int pos = snprintf(out, out_sz, "{\"agent\":\"%s\",\"evidence\":[",
+                       e ? e->name : "");
+    if (e) {
+        for (int i = 0; i < e->evidence_n; i++) {
+            if (i > 0 && (size_t)pos < out_sz)
+                pos += snprintf(out + pos, out_sz - (size_t)pos, ",");
+            if ((size_t)pos < out_sz) {
+                pos += snprintf(out + pos, out_sz - (size_t)pos,
+                    "{\"type\":\"%s\",\"detail\":\"%s\",\"ts\":%ld}",
+                    e->evidence[i].ev_type,
+                    e->evidence[i].detail,
+                    (long)e->evidence[i].ts);
+            }
+        }
+    }
+    if ((size_t)pos < out_sz)
+        snprintf(out + pos, out_sz - (size_t)pos, "]}");
+}
+
+static void handle_http(compat_socket_t cfd)
+{
+    struct timeval client_tv = {10, 0};
+    setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO,
+               COMPAT_SOCKOPT_CAST(&client_tv), sizeof(client_tv));
+    setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO,
+               COMPAT_SOCKOPT_CAST(&client_tv), sizeof(client_tv));
+
+    static char req[HTTP_BUF_SZ];
+    int n = http_recv_full(cfd, req, sizeof(req), HTTP_MAX_BODY_SZ);
+    if (n == -2) {
+        http_send(cfd, 413, "{\"error\":\"payload too large\"}");
+        compat_close_socket(cfd); return;
+    }
+    if (n <= 0) { compat_close_socket(cfd); return; }
+
+    char method[8], path[256];
+    if (sscanf(req, "%7s %255s", method, path) != 2) {
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET / — role-tailored landing page */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0) {
+        http_send_html(cfd, (const char *)ui_html, (size_t)ui_html_len);
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET /health */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
+        int quar = 0, warns = 0, bl = 0;
+        for (int i = 0; i < g_threats.count; i++) {
+            if (!g_threats.entries[i].active) continue;
+            if (g_threats.entries[i].blacklisted) bl++;
+            else if (g_threats.entries[i].quarantined) quar++;
+            else if (g_threats.entries[i].warn_count) warns++;
+        }
+        char body[256];
+        snprintf(body, sizeof(body),
+            "{\"status\":\"ok\",\"name\":\"%s\","
+             "\"peers\":%d,\"warnings\":%d,"
+             "\"quarantined\":%d,\"blacklisted\":%d}",
+            g_agent_name, g_peers.count, warns, quar, bl);
+        http_send(cfd, 200, body);
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET /peers */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/peers") == 0) {
+        char body[HTTP_BUF_SZ / 2];
+        peer_list_json(&g_peers, body, sizeof(body));
+        http_send(cfd, 200, body);
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET /threats — full threat board */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/threats") == 0) {
+        static char body[HTTP_BUF_SZ];
+        threats_to_json(body, sizeof(body));
+        http_send(cfd, 200, body);
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET /evidence?agent=X */
+    if (strcmp(method, "GET") == 0 &&
+        strncmp(path, "/evidence", 9) == 0) {
+        char agent[64] = {0};
+        const char *q = strstr(path, "agent=");
+        if (q) {
+            q += 6;
+            int j = 0;
+            while (*q && *q != '&' && j < (int)sizeof(agent) - 1)
+                agent[j++] = *q++;
+            agent[j] = '\0';
+        }
+        if (agent[0] == '\0') {
+            http_send(cfd, 400, "{\"error\":\"agent parameter required\"}");
+            compat_close_socket(cfd); return;
+        }
+        const ThreatEntry *e = threat_get(agent);
+        static char body[HTTP_BUF_SZ];
+        evidence_to_json(e, body, sizeof(body));
+        http_send(cfd, e ? 200 : 404, body);
+        compat_close_socket(cfd); return;
+    }
+
+    /* POST /quarantine/node  body: {"agent":"X","reason":"Y","duration":N} */
+    if (strcmp(method, "POST") == 0 &&
+        strcmp(path, "/quarantine/node") == 0) {
+        char *body = strstr(req, "\r\n\r\n");
+        if (!body) {
+            http_send(cfd, 400, "{\"error\":\"no body\"}");
+            compat_close_socket(cfd); return;
+        }
+        body += 4;
+
+        char agent[64] = {0};
+        char reason[128] = {0};
+        json_str(body, "agent",  agent,  sizeof(agent));
+        json_str(body, "reason", reason, sizeof(reason));
+
+        /* duration is numeric, so json_str (string-only) won't match it. */
+        time_t dur = QUARANTINE_DURATION_SEC;
+        {
+            const char *d = strstr(body, "\"duration\"");
+            if (d) {
+                d += 10;
+                while (*d == ' ' || *d == ':') d++;
+                if (*d >= '0' && *d <= '9') dur = (time_t)atol(d);
+            }
+        }
+
+        if (agent[0] == '\0') {
+            http_send(cfd, 400, "{\"error\":\"agent required\"}");
+            compat_close_socket(cfd); return;
+        }
+        if (is_sentient(agent)) {
+            http_send(cfd, 403,
+                "{\"error\":\"cannot quarantine sentient\"}");
+            compat_close_socket(cfd); return;
+        }
+        do_quarantine(agent, reason[0] ? reason : "manual", dur);
+
+        char resp[256];
+        snprintf(resp, sizeof(resp),
+            "{\"ok\":true,\"agent\":\"%s\",\"duration\":%ld}",
+            agent, (long)dur);
+        http_send(cfd, 200, resp);
+        compat_close_socket(cfd); return;
+    }
+
+    /* POST /quarantine/lift  body: {"agent":"X"} */
+    if (strcmp(method, "POST") == 0 &&
+        strcmp(path, "/quarantine/lift") == 0) {
+        char *body = strstr(req, "\r\n\r\n");
+        if (!body) {
+            http_send(cfd, 400, "{\"error\":\"no body\"}");
+            compat_close_socket(cfd); return;
+        }
+        body += 4;
+
+        char agent[64] = {0};
+        json_str(body, "agent", agent, sizeof(agent));
+        if (agent[0] == '\0') {
+            http_send(cfd, 400, "{\"error\":\"agent required\"}");
+            compat_close_socket(cfd); return;
+        }
+        const ThreatEntry *e = threat_get(agent);
+        if (!e || !e->quarantined) {
+            http_send(cfd, 404, "{\"error\":\"not quarantined\"}");
+            compat_close_socket(cfd); return;
+        }
+        do_unquarantine(agent);
+        /* Broadcast lift so peers stop shunning too. */
+        broadcast_enforce("U", agent, "manual lift");
+
+        char resp[256];
+        snprintf(resp, sizeof(resp),
+            "{\"ok\":true,\"agent\":\"%s\"}", agent);
+        http_send(cfd, 200, resp);
+        compat_close_socket(cfd); return;
+    }
+
+    /* POST /blacklist  body: {"agent":"X","reason":"Y"}
+     * Marks an agent permanently quarantined + blacklisted, and gossips the
+     * blacklist. ROLE_ENFORCER.md describes a two-phase flow (enforcer
+     * proposes, sentient approves), which is not yet modelled in the struct;
+     * for now, the enforcer applies it directly. */
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/blacklist") == 0) {
+        char *body = strstr(req, "\r\n\r\n");
+        if (!body) {
+            http_send(cfd, 400, "{\"error\":\"no body\"}");
+            compat_close_socket(cfd); return;
+        }
+        body += 4;
+
+        char agent[64] = {0};
+        char reason[128] = {0};
+        json_str(body, "agent",  agent,  sizeof(agent));
+        json_str(body, "reason", reason, sizeof(reason));
+
+        if (agent[0] == '\0') {
+            http_send(cfd, 400, "{\"error\":\"agent required\"}");
+            compat_close_socket(cfd); return;
+        }
+        if (is_sentient(agent)) {
+            http_send(cfd, 403,
+                "{\"error\":\"cannot blacklist sentient\"}");
+            compat_close_socket(cfd); return;
+        }
+
+        ThreatEntry *e = threat_get_or_create(agent);
+        if (!e) {
+            http_send(cfd, 500, "{\"error\":\"threat table full\"}");
+            compat_close_socket(cfd); return;
+        }
+        e->blacklisted = 1;
+        strncpy(e->blacklist_reason,
+                reason[0] ? reason : "blacklist",
+                sizeof(e->blacklist_reason) - 1);
+        /* Permanent quarantine + gossip. */
+        do_quarantine(agent, reason[0] ? reason : "blacklist", 0);
+        broadcast_enforce("B", agent, reason[0] ? reason : "blacklist");
+
+        char resp[256];
+        snprintf(resp, sizeof(resp),
+            "{\"ok\":true,\"agent\":\"%s\",\"blacklisted\":true}", agent);
+        http_send(cfd, 200, resp);
+        compat_close_socket(cfd); return;
+    }
+
+    if (strcmp(method, "OPTIONS") == 0) {
+        http_send(cfd, 200, "{}");
+        compat_close_socket(cfd); return;
+    }
+
+    http_send(cfd, 404, "{\"error\":\"not found\"}");
+    compat_close_socket(cfd);
+}
+
 /* ── Main ────────────────────────────────────────────────────────────── */
 
 int main(int argc, char **argv)
@@ -608,6 +895,17 @@ int main(int argc, char **argv)
         broadcast_enforce("B", approve_target, "sentient approved");
     }
 
+    /* HTTP management API */
+    g_http_fd = http_listen(g_agent_port);
+    if (g_http_fd == COMPAT_INVALID_SOCKET) {
+        fprintf(stderr, "[%s] failed to bind HTTP on port %u\n",
+                g_agent_name, g_agent_port);
+        if (g_use_mqtt) mqtt_transport_close(&g_mqtt);
+        else            udp_close(&g_udp);
+        return 1;
+    }
+    printf("[%s] HTTP API on port %u\n", g_agent_name, g_agent_port);
+
     static uint8_t  in_buf[65536];
     static char     peer_name[64];
     static char     payload[NML_MAX_PROGRAM_LEN + 1];
@@ -620,8 +918,24 @@ int main(int argc, char **argv)
         time_t now = time(NULL);
         int received = 0;
 
+        /* HTTP accept with 1 s timeout — shared scheduling quantum with
+         * the MQTT/UDP loop below. Using select() here so slow HTTP clients
+         * don't block MQTT event processing. */
+        {
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(g_http_fd, &rfds);
+            struct timeval tv = {1, 0};
+            int sel = select(COMPAT_SELECT_NFDS(g_http_fd),
+                             &rfds, NULL, NULL, &tv);
+            if (sel > 0 && FD_ISSET(g_http_fd, &rfds)) {
+                compat_socket_t cfd = accept(g_http_fd, NULL, NULL);
+                if (cfd != COMPAT_INVALID_SOCKET) handle_http(cfd);
+            }
+        }
+
         if (g_use_mqtt) {
-            mqtt_transport_sync(&g_mqtt, 1000);
+            mqtt_transport_sync(&g_mqtt, 0);
             int pkt_len;
             while ((pkt_len = mqtt_transport_recv(&g_mqtt, in_buf,
                                                    sizeof(in_buf), sender_ip)) > 0) {
@@ -675,7 +989,8 @@ int main(int argc, char **argv)
             }
         } else {
             sender_ip[0] = '\0';
-            received = udp_recv(&g_udp, in_buf, sizeof(in_buf), 1000, sender_ip);
+            /* Non-blocking — the HTTP select() above already paced the loop */
+            received = udp_recv(&g_udp, in_buf, sizeof(in_buf), 0, sender_ip);
 
             if (received > 0) {
                 int      type;
@@ -755,6 +1070,8 @@ heartbeat:
     }
 
     printf("\n[%s] shutting down\n", g_agent_name);
+    if (g_http_fd != COMPAT_INVALID_SOCKET)
+        compat_close_socket(g_http_fd);
     if (g_use_mqtt)
         mqtt_transport_close(&g_mqtt);
     else

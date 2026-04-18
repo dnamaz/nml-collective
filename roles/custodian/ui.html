@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Custodian</title>
+<style>
+:root {
+  --accent: #f0883e;
+  --accent-dim: #bd561d;
+  --warn: #d29922;
+  --ok: #3fb950;
+  --bad: #da3633;
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #21262d;
+  --fg: #c9d1d9;
+  --muted: #8b949e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg); color: var(--fg); line-height: 1.5;
+}
+header {
+  padding: 20px 32px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  background: linear-gradient(90deg, rgba(240,136,62,0.12), transparent);
+}
+h1 { margin: 0; font-size: 18px; font-weight: 600; }
+h1 .tag {
+  background: var(--accent); color: white; padding: 3px 10px;
+  border-radius: 3px; font-size: 11px; letter-spacing: 0.12em; margin-right: 10px;
+}
+.stats { font-size: 13px; color: var(--muted); }
+.stats strong { color: var(--fg); }
+.dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok); margin-right: 6px; vertical-align: middle;
+}
+main { padding: 24px 32px; max-width: 1100px; margin: 0 auto; }
+section {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 20px; margin-bottom: 16px;
+}
+.h2row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+h2 {
+  margin: 0; font-size: 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;
+}
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
+td { font-family: ui-monospace, monospace; }
+td.name { font-family: inherit; }
+tr:hover td { background: var(--bg); }
+.badge {
+  padding: 2px 8px; border-radius: 3px; font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
+}
+.badge.p { background: var(--warn); color: black; }
+.badge.a { background: var(--ok); color: black; }
+.badge.r { background: var(--bad); color: white; }
+.mf { background: var(--accent-dim); color: white; padding: 1px 6px; border-radius: 3px; font-size: 10px; margin-left: 6px; }
+button {
+  background: var(--border); color: var(--fg); border: 1px solid #30363d;
+  padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
+  font-family: inherit;
+}
+button:hover { background: #30363d; }
+button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+button.primary:hover { background: #ff9f55; }
+button.danger { background: var(--bad); border-color: var(--bad); color: white; }
+button.small { padding: 3px 10px; font-size: 12px; }
+input, textarea, select {
+  background: var(--bg); color: var(--fg); border: 1px solid #30363d;
+  padding: 7px 10px; border-radius: 4px; font-size: 13px; font-family: inherit;
+}
+input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+textarea {
+  font-family: ui-monospace, monospace; font-size: 12px;
+  width: 100%; min-height: 100px; resize: vertical;
+}
+.form-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+.form-row label { color: var(--muted); font-size: 12px; width: 80px; }
+.peer {
+  display: inline-block; margin-right: 16px;
+  font-family: ui-monospace, monospace; font-size: 13px;
+}
+.empty { color: var(--muted); font-style: italic; padding: 16px; text-align: center; }
+footer { text-align: center; color: var(--muted); font-size: 11px; padding: 16px; }
+.nav a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.nav a:hover { color: var(--fg); }
+.ledger-status { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); }
+.ledger-status.ok { color: var(--ok); }
+.ledger-status.bad { color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class='tag'>CUSTODIAN</span><span id='name'>loading&hellip;</span></h1>
+  <div class='stats'><span class='dot' id='dot'></span><span id='stats'></span></div>
+</header>
+<main>
+  <section>
+    <h2>Ingest Data</h2>
+    <div class='form-row'>
+      <label>name</label>
+      <input id='in-name' placeholder='dataset name' style='flex:1'>
+      <label>format</label>
+      <select id='in-format'>
+        <option value='json'>json</option>
+        <option value='csv'>csv</option>
+      </select>
+      <label>features</label>
+      <input id='in-features' type='number' value='1' style='width:100px'>
+    </div>
+    <textarea id='in-data' placeholder='[1.0, 2.0, 3.0, 4.0, ...]  or CSV lines'></textarea>
+    <div class='form-row' style='margin-top:8px'>
+      <button class='primary' id='btn-ingest'>Submit to Quarantine</button>
+      <span class='ledger-status' id='ingest-msg'></span>
+    </div>
+  </section>
+  <section>
+    <div class='h2row'>
+      <h2>Object Pool</h2>
+      <span class='ledger-status' id='pcount'>&mdash;</span>
+    </div>
+    <div id='pool'></div>
+  </section>
+  <section>
+    <div class='h2row'>
+      <h2>Transaction Ledger</h2>
+      <button class='small' id='btn-verify'>Verify Chain</button>
+    </div>
+    <div class='ledger-status' id='ledger'>click Verify Chain to check integrity</div>
+  </section>
+  <section>
+    <h2>Peers</h2>
+    <div id='peers'></div>
+  </section>
+</main>
+<footer>
+  <div class='nav'>
+    role: custodian &middot; endpoints:
+    <a href='/health'>/health</a> &middot;
+    <a href='/pool'>/pool</a> &middot;
+    <a href='/ledger'>/ledger</a>
+  </div>
+  <div id='footer'>idle</div>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const get = (p) => fetch(p).then(r => r.json());
+const post = (p, b) => fetch(p, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(b),
+}).then(r => r.json());
+const del = (p) => fetch(p, { method: 'DELETE' }).then(r => r.json());
+
+const escMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
+escMap[String.fromCharCode(34)] = '&quot;';
+escMap[String.fromCharCode(39)] = '&#39;';
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>'"]/g, (c) => escMap[c]);
+const badgeCls = (s) => ({ pending: 'p', approved: 'a', rejected: 'r' })[s] || 'p';
+
+async function renderHealth() {
+  const h = await get('/health');
+  $('name').textContent = h.name || 'custodian';
+  $('stats').innerHTML =
+    '<strong>' + (h.items || 0) + '</strong> items &middot; ' +
+    '<strong>' + (h.approved || 0) + '</strong> approved';
+}
+
+async function renderPool() {
+  const list = await get('/pool');
+  const items = Array.isArray(list) ? list : [];
+  $('pcount').textContent = items.length + ' objects';
+  const host = $('pool');
+  if (!items.length) {
+    host.innerHTML = '<div class=\'empty\'>Object pool empty. Ingest some data.</div>';
+    return;
+  }
+  const rows = items.map((it) =>
+    '<tr>' +
+      '<td class=\'name\'>' + esc(it.name) +
+        (it.manifest ? '<span class=\'mf\'>manifest &middot; ' + (it.shard_count || 0) + '</span>' : '') +
+      '</td>' +
+      '<td>' + esc(it.hash) + '</td>' +
+      '<td>' + esc(it.author || '?') + '</td>' +
+      '<td>' + (it.n_samples || 0) + '</td>' +
+      '<td><span class=\'badge ' + badgeCls(it.status) + '\'>' + esc(it.status) + '</span></td>' +
+      '<td>' + (it.served || 0) + '</td>' +
+      '<td><button class=\'danger small\' data-hash=\'' + esc(it.hash) + '\'>Delete</button></td>' +
+    '</tr>'
+  ).join('');
+  host.innerHTML =
+    '<table><thead><tr>' +
+      '<th>Name</th><th>Hash</th><th>Author</th><th>Samples</th>' +
+      '<th>Status</th><th>Served</th><th></th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
+async function renderPeers() {
+  try {
+    const peers = await get('/peers');
+    const list = Array.isArray(peers) ? peers : (peers.peers || []);
+    const host = $('peers');
+    if (!list.length) {
+      host.innerHTML = '<div class=\'empty\'>No peers seen yet.</div>';
+      return;
+    }
+    host.innerHTML = list.map((p) =>
+      '<span class=\'peer\'>' + esc(p.name || p) + '</span>'
+    ).join('');
+  } catch (e) {
+    $('peers').innerHTML = '<div class=\'empty\'>(no peers yet)</div>';
+  }
+}
+
+async function refreshAll() {
+  try {
+    await Promise.all([renderHealth(), renderPool(), renderPeers()]);
+    $('footer').textContent = 'refreshed ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('footer').textContent = 'error: ' + e.message;
+  }
+}
+
+async function verifyChain() {
+  $('ledger').textContent = 'verifying&hellip;';
+  $('ledger').className = 'ledger-status';
+  try {
+    const r = await get('/ledger/verify');
+    if (r.ok) {
+      $('ledger').textContent = 'chain OK — ' + r.total + ' records verified';
+      $('ledger').className = 'ledger-status ok';
+    } else {
+      $('ledger').textContent = 'CORRUPT at tx_id=' + r.bad_tx_id;
+      $('ledger').className = 'ledger-status bad';
+    }
+  } catch (e) {
+    $('ledger').textContent = 'error: ' + e.message;
+  }
+}
+
+async function doIngest() {
+  const name = $('in-name').value.trim() || 'unnamed';
+  const format = $('in-format').value;
+  const features = parseInt($('in-features').value, 10) || 1;
+  const data = $('in-data').value.trim();
+  if (!data) { alert('data is required'); return; }
+  $('ingest-msg').textContent = 'submitting&hellip;';
+  const r = await post('/ingest', { name, format, features, data });
+  if (r.error) {
+    $('ingest-msg').textContent = 'error: ' + r.error;
+    $('ingest-msg').className = 'ledger-status bad';
+    return;
+  }
+  $('ingest-msg').textContent =
+    'queued: hash=' + (r.hash || '?') +
+    (r.manifest ? ' (manifest, ' + r.shards + ' shards)' : '');
+  $('ingest-msg').className = 'ledger-status ok';
+  $('in-data').value = '';
+  refreshAll();
+}
+
+async function doDelete(hash) {
+  if (!confirm('Delete object ' + hash + '? Cannot be undone.')) return;
+  const r = await del('/objects/' + encodeURIComponent(hash));
+  if (r.error) alert(r.error); else refreshAll();
+}
+
+$('btn-verify').addEventListener('click', verifyChain);
+$('btn-ingest').addEventListener('click', doIngest);
+$('pool').addEventListener('click', (e) => {
+  const h = e.target.dataset.hash;
+  if (h) doDelete(h);
+});
+
+refreshAll();
+setInterval(refreshAll, 4000);
+</script>
+</body>
+</html>

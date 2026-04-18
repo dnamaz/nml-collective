@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Oracle</title>
+<style>
+:root {
+  --accent: #d29922;
+  --accent-dim: #9e7b28;
+  --ok: #3fb950;
+  --bad: #da3633;
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #21262d;
+  --fg: #c9d1d9;
+  --muted: #8b949e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg); color: var(--fg); line-height: 1.5;
+}
+header {
+  padding: 20px 32px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  background: linear-gradient(90deg, rgba(210,153,34,0.12), transparent);
+}
+h1 { margin: 0; font-size: 18px; font-weight: 600; }
+h1 .tag {
+  background: var(--accent); color: black; padding: 3px 10px;
+  border-radius: 3px; font-size: 11px; letter-spacing: 0.12em; margin-right: 10px;
+}
+.stats { font-size: 13px; color: var(--muted); }
+.stats strong { color: var(--fg); }
+.dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok); margin-right: 6px; vertical-align: middle;
+}
+main { padding: 24px 32px; max-width: 1100px; margin: 0 auto; }
+section {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 20px; margin-bottom: 16px;
+}
+.h2row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+h2 {
+  margin: 0; font-size: 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;
+}
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
+td { font-family: ui-monospace, monospace; }
+td.name { font-family: inherit; }
+td.num { text-align: right; }
+tr:hover td { background: var(--bg); }
+.conf-bar {
+  display: inline-block; width: 80px; height: 6px;
+  background: var(--border); border-radius: 3px; overflow: hidden; margin-right: 6px;
+}
+.conf-bar div { height: 100%; background: var(--accent); }
+button {
+  background: var(--border); color: var(--fg); border: 1px solid #30363d;
+  padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
+  font-family: inherit;
+}
+button:hover { background: #30363d; }
+button.primary { background: var(--accent); border-color: var(--accent); color: black; }
+button.primary:hover { background: #e5ab2e; }
+input, textarea {
+  background: var(--bg); color: var(--fg); border: 1px solid #30363d;
+  padding: 7px 10px; border-radius: 4px; font-size: 13px; font-family: inherit;
+}
+input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+textarea { width: 100%; min-height: 70px; resize: vertical; font-family: inherit; }
+.form-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+.peer {
+  display: inline-block; margin-right: 16px;
+  font-family: ui-monospace, monospace; font-size: 13px;
+}
+.empty { color: var(--muted); font-style: italic; padding: 16px; text-align: center; }
+footer { text-align: center; color: var(--muted); font-size: 11px; padding: 16px; }
+.nav a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.nav a:hover { color: var(--fg); }
+.msg { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); }
+.msg.ok { color: var(--ok); }
+.msg.bad { color: var(--bad); }
+.outlier-flag { color: var(--bad); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class='tag'>ORACLE</span><span id='name'>loading&hellip;</span></h1>
+  <div class='stats'><span class='dot' id='dot'></span><span id='stats'></span></div>
+</header>
+<main>
+  <section>
+    <h2>Generate Program Spec</h2>
+    <textarea id='sp-intent' placeholder='Describe what the collective should build. Example: Detect fraud in EU transactions using recent approved data.'></textarea>
+    <div class='form-row'>
+      <button class='primary' id='btn-spec'>Send to Architect</button>
+      <span class='msg' id='spec-msg'></span>
+    </div>
+  </section>
+  <section>
+    <div class='h2row'>
+      <h2>Program Assessments</h2>
+      <span class='msg' id='acount'>&mdash;</span>
+    </div>
+    <div id='assessments'></div>
+  </section>
+  <section>
+    <div class='h2row'>
+      <h2>Agent Confidence</h2>
+      <span class='msg' id='gcount'>&mdash;</span>
+    </div>
+    <div id='agents'></div>
+  </section>
+  <section>
+    <h2>Peers</h2>
+    <div id='peers'></div>
+  </section>
+</main>
+<footer>
+  <div class='nav'>
+    role: oracle &middot; endpoints:
+    <a href='/health'>/health</a> &middot;
+    <a href='/assessments'>/assessments</a> &middot;
+    <a href='/agents'>/agents</a>
+  </div>
+  <div id='footer'>idle</div>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const get = (p) => fetch(p).then(r => r.json());
+const post = (p, b) => fetch(p, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(b),
+}).then(r => r.json());
+
+const escMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
+escMap[String.fromCharCode(34)] = '&quot;';
+escMap[String.fromCharCode(39)] = '&#39;';
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>'"]/g, (c) => escMap[c]);
+const pct = (v) => (v * 100).toFixed(0) + '%';
+
+async function renderHealth() {
+  const h = await get('/health');
+  $('name').textContent = h.name || 'oracle';
+  $('stats').innerHTML =
+    '<strong>' + (h.agents || 0) + '</strong> agents tracked &middot; ' +
+    '<strong>' + (h.sessions || 0) + '</strong> programs assessed &middot; ' +
+    'llm: <strong>' + (h.llm ? 'on' : 'off') + '</strong>';
+}
+
+async function renderAssessments() {
+  const list = await get('/assessments');
+  const items = Array.isArray(list) ? list : [];
+  $('acount').textContent = items.length + ' assessments';
+  const host = $('assessments');
+  if (!items.length) {
+    host.innerHTML = '<div class=\'empty\'>No programs assessed yet.</div>';
+    return;
+  }
+  const rows = items.map((s) =>
+    '<tr>' +
+      '<td>' + esc(s.phash) + '</td>' +
+      '<td class=\'num\'>' + (s.weighted_mean || 0).toFixed(3) + '</td>' +
+      '<td class=\'num\'>' +
+        '<span class=\'conf-bar\'><div style=\'width:' + pct(s.confidence || 0) + '\'></div></span>' +
+        pct(s.confidence || 0) +
+      '</td>' +
+      '<td class=\'num\'>' + (s.votes || 0) + '</td>' +
+    '</tr>'
+  ).join('');
+  host.innerHTML =
+    '<table><thead><tr>' +
+      '<th>Program Hash</th><th class=\'num\'>Weighted</th>' +
+      '<th class=\'num\'>Confidence</th><th class=\'num\'>Votes</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
+async function renderAgents() {
+  const list = await get('/agents');
+  const items = Array.isArray(list) ? list : [];
+  $('gcount').textContent = items.length + ' agents';
+  const host = $('agents');
+  if (!items.length) {
+    host.innerHTML = '<div class=\'empty\'>No agent stats yet.</div>';
+    return;
+  }
+  const rows = items
+    .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
+    .map((a) => {
+      const rate = (a.votes > 0 ? (a.outliers / a.votes) : 0);
+      return '<tr>' +
+        '<td class=\'name\'>' + esc(a.name) + '</td>' +
+        '<td class=\'num\'>' +
+          '<span class=\'conf-bar\'><div style=\'width:' + pct(a.confidence || 0) + '\'></div></span>' +
+          pct(a.confidence || 0) +
+        '</td>' +
+        '<td class=\'num\'>' + (a.votes || 0) + '</td>' +
+        '<td class=\'num ' + (rate > 0.25 ? 'outlier-flag' : '') + '\'>' +
+          (a.outliers || 0) + ' (' + pct(rate) + ')' +
+        '</td>' +
+      '</tr>';
+    }).join('');
+  host.innerHTML =
+    '<table><thead><tr>' +
+      '<th>Agent</th><th class=\'num\'>Confidence</th>' +
+      '<th class=\'num\'>Votes</th><th class=\'num\'>Outliers</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
+async function renderPeers() {
+  try {
+    const peers = await get('/peers');
+    const list = Array.isArray(peers) ? peers : (peers.peers || []);
+    const host = $('peers');
+    if (!list.length) {
+      host.innerHTML = '<div class=\'empty\'>No peers seen yet.</div>';
+      return;
+    }
+    host.innerHTML = list.map((p) =>
+      '<span class=\'peer\'>' + esc(p.name || p) + '</span>'
+    ).join('');
+  } catch (e) {
+    $('peers').innerHTML = '<div class=\'empty\'>(no peers yet)</div>';
+  }
+}
+
+async function refreshAll() {
+  try {
+    await Promise.all([renderHealth(), renderAssessments(), renderAgents(), renderPeers()]);
+    $('footer').textContent = 'refreshed ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('footer').textContent = 'error: ' + e.message;
+  }
+}
+
+async function submitSpec() {
+  const intent = $('sp-intent').value.trim();
+  if (!intent) { alert('intent required'); return; }
+  $('spec-msg').textContent = 'submitting&hellip;';
+  $('spec-msg').className = 'msg';
+  const r = await post('/spec', { intent });
+  if (r.error) {
+    $('spec-msg').textContent = 'error: ' + r.error;
+    $('spec-msg').className = 'msg bad';
+    return;
+  }
+  $('spec-msg').textContent = 'queued to Architect via MSG_SPEC';
+  $('spec-msg').className = 'msg ok';
+  $('sp-intent').value = '';
+}
+
+$('btn-spec').addEventListener('click', submitSpec);
+
+refreshAll();
+setInterval(refreshAll, 4000);
+</script>
+</body>
+</html>

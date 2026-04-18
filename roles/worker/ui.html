@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Worker</title>
+<style>
+:root {
+  --accent: #3fb950;
+  --accent-dim: #238636;
+  --ok: #3fb950;
+  --bad: #da3633;
+  --warn: #d29922;
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #21262d;
+  --fg: #c9d1d9;
+  --muted: #8b949e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg); color: var(--fg); line-height: 1.5;
+}
+header {
+  padding: 20px 32px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  background: linear-gradient(90deg, rgba(63,185,80,0.12), transparent);
+}
+h1 { margin: 0; font-size: 18px; font-weight: 600; }
+h1 .tag {
+  background: var(--accent); color: black; padding: 3px 10px;
+  border-radius: 3px; font-size: 11px; letter-spacing: 0.12em; margin-right: 10px;
+}
+.stats { font-size: 13px; color: var(--muted); }
+.stats strong { color: var(--fg); }
+.dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok); margin-right: 6px; vertical-align: middle;
+}
+main { padding: 24px 32px; max-width: 1100px; margin: 0 auto; }
+section {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 20px; margin-bottom: 16px;
+}
+.h2row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+h2 {
+  margin: 0; font-size: 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;
+}
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
+td { font-family: ui-monospace, monospace; }
+td.name { font-family: inherit; font-size: 13px; }
+td.num { text-align: right; }
+tr:hover td { background: var(--bg); }
+.score {
+  display: inline-block; min-width: 50px; padding: 2px 8px;
+  background: var(--accent-dim); color: white; border-radius: 3px;
+  text-align: right; font-weight: 600;
+}
+.badge {
+  padding: 2px 8px; border-radius: 3px; font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
+}
+.badge.ok { background: var(--ok); color: black; }
+.badge.pending { background: var(--warn); color: black; }
+.badge.bad { background: var(--bad); color: white; }
+.peer {
+  display: inline-block; margin-right: 16px;
+  font-family: ui-monospace, monospace; font-size: 13px;
+}
+.empty { color: var(--muted); font-style: italic; padding: 16px; text-align: center; }
+footer { text-align: center; color: var(--muted); font-size: 11px; padding: 16px; }
+.nav a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.nav a:hover { color: var(--fg); }
+.msg { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class='tag'>WORKER</span><span id='name'>loading&hellip;</span></h1>
+  <div class='stats'><span class='dot'></span><span id='stats'></span></div>
+</header>
+<main>
+  <section>
+    <div class='h2row'>
+      <h2>Recent Execution Results</h2>
+      <span class='msg' id='rcount'>&mdash;</span>
+    </div>
+    <div id='results'></div>
+  </section>
+  <section>
+    <div class='h2row'>
+      <h2>Local Data Cache</h2>
+      <span class='msg' id='dcount'>&mdash;</span>
+    </div>
+    <div id='cache'></div>
+  </section>
+  <section>
+    <h2>Peers</h2>
+    <div id='peers'></div>
+  </section>
+</main>
+<footer>
+  <div class='nav'>
+    role: worker &middot; endpoints:
+    <a href='/health'>/health</a> &middot;
+    <a href='/results'>/results</a> &middot;
+    <a href='/data/cache'>/data/cache</a> &middot;
+    <a href='/peers'>/peers</a>
+  </div>
+  <div id='footer'>idle</div>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const get = (p) => fetch(p).then(r => r.json());
+
+const escMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
+escMap[String.fromCharCode(34)] = '&quot;';
+escMap[String.fromCharCode(39)] = '&#39;';
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>'"]/g, (c) => escMap[c]);
+
+const fmtSize = (n) => {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+};
+const fmtAge = (ts) => {
+  const s = Math.floor(Date.now() / 1000) - ts;
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  return Math.floor(s / 3600) + 'h ago';
+};
+
+async function renderHealth() {
+  const h = await get('/health');
+  $('name').textContent = h.name || 'worker';
+  $('stats').innerHTML =
+    '<strong>' + (h.peers || 0) + '</strong> peers &middot; ' +
+    '<strong>' + (h.results || 0) + '</strong> results &middot; ' +
+    '<strong>' + (h.cache || 0) + '</strong> cached datasets';
+}
+
+async function renderResults() {
+  const list = await get('/results');
+  const items = Array.isArray(list) ? list : [];
+  $('rcount').textContent = items.length + ' results';
+  const host = $('results');
+  if (!items.length) {
+    host.innerHTML = '<div class=\'empty\'>No programs executed yet.</div>';
+    return;
+  }
+  const rows = items.map((r) =>
+    '<tr>' +
+      '<td>' + esc(r.phash) + '</td>' +
+      '<td class=\'num\'><span class=\'score\'>' + esc(r.score) + '</span></td>' +
+      '<td>' + (r.ts ? fmtAge(r.ts) : '?') + '</td>' +
+    '</tr>'
+  ).join('');
+  host.innerHTML =
+    '<table><thead><tr>' +
+      '<th>Program Hash</th><th class=\'num\'>Score</th><th>When</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
+async function renderCache() {
+  try {
+    const list = await get('/data/cache');
+    const items = Array.isArray(list) ? list : [];
+    $('dcount').textContent = items.length + ' entries';
+    const host = $('cache');
+    if (!items.length) {
+      host.innerHTML = '<div class=\'empty\'>Cache empty. Data will be fetched from the Custodian on demand.</div>';
+      return;
+    }
+    const rows = items.map((e) => {
+      const status = e.rejected ? 'bad' : (e.valid ? 'ok' : 'pending');
+      const label  = e.rejected ? 'rejected' : (e.valid ? 'ready' : 'loading');
+      return '<tr>' +
+        '<td class=\'name\'>' + esc(e.name) + '</td>' +
+        '<td>' + esc(e.hash || '-') + '</td>' +
+        '<td class=\'num\'>' + fmtSize(e.size || 0) + '</td>' +
+        '<td>' + (e.is_mmap ? 'mmap' : 'heap') + '</td>' +
+        '<td><span class=\'badge ' + status + '\'>' + label + '</span></td>' +
+      '</tr>';
+    }).join('');
+    host.innerHTML =
+      '<table><thead><tr>' +
+        '<th>Name</th><th>Hash</th><th class=\'num\'>Size</th>' +
+        '<th>Store</th><th>Status</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+  } catch (e) {
+    $('cache').innerHTML = '<div class=\'empty\'>(cache not available)</div>';
+  }
+}
+
+async function renderPeers() {
+  try {
+    const peers = await get('/peers');
+    const list = Array.isArray(peers) ? peers : (peers.peers || []);
+    const host = $('peers');
+    if (!list.length) {
+      host.innerHTML = '<div class=\'empty\'>No peers seen yet.</div>';
+      return;
+    }
+    host.innerHTML = list.map((p) =>
+      '<span class=\'peer\'>' + esc(p.name || p) + '</span>'
+    ).join('');
+  } catch (e) {
+    $('peers').innerHTML = '';
+  }
+}
+
+async function refreshAll() {
+  try {
+    await Promise.all([renderHealth(), renderResults(), renderCache(), renderPeers()]);
+    $('footer').textContent = 'refreshed ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('footer').textContent = 'error: ' + e.message;
+  }
+}
+
+refreshAll();
+setInterval(refreshAll, 3000);
+</script>
+</body>
+</html>

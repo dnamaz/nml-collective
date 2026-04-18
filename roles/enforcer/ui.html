@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Enforcer</title>
+<style>
+:root {
+  --accent: #da3633;
+  --accent-dim: #8b0000;
+  --warn: #d29922;
+  --ok: #3fb950;
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #21262d;
+  --fg: #c9d1d9;
+  --muted: #8b949e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.5;
+}
+header {
+  padding: 20px 32px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: linear-gradient(90deg, rgba(218,54,51,0.12), transparent);
+}
+h1 { margin: 0; font-size: 18px; font-weight: 600; }
+h1 .tag {
+  background: var(--accent);
+  color: white;
+  padding: 3px 10px;
+  border-radius: 3px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  margin-right: 10px;
+}
+.stats { font-size: 13px; color: var(--muted); }
+.stats strong { color: var(--fg); }
+.dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.dot.off { background: var(--accent); }
+main { padding: 24px 32px; max-width: 1100px; margin: 0 auto; }
+section {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+h2 {
+  margin: 0 0 16px 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+}
+.threat {
+  padding: 14px 16px;
+  border-left: 3px solid var(--muted);
+  margin-bottom: 10px;
+  background: var(--bg);
+  border-radius: 0 4px 4px 0;
+}
+.threat.quar { border-left-color: var(--accent); }
+.threat.bl { border-left-color: var(--accent-dim); background: #1a0606; }
+.threat.warn { border-left-color: var(--warn); }
+.thead { display: flex; justify-content: space-between; align-items: center; }
+.tname { font-weight: 600; font-family: ui-monospace, monospace; }
+.treason { color: var(--muted); font-size: 13px; margin-top: 6px; }
+.badge {
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.badge.q { background: var(--accent); color: white; }
+.badge.b { background: var(--accent-dim); color: white; }
+.badge.w { background: var(--warn); color: black; }
+.badge.c { background: var(--ok); color: black; }
+.row2 { margin-top: 10px; display: flex; gap: 6px; }
+button {
+  background: var(--border);
+  color: var(--fg);
+  border: 1px solid #30363d;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+}
+button:hover { background: #30363d; }
+button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+button.primary:hover { background: #f04f4c; }
+button.danger { background: var(--accent-dim); border-color: var(--accent-dim); color: white; }
+button.danger:hover { background: #aa0000; }
+input {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid #30363d;
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+}
+input:focus { outline: none; border-color: var(--accent); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.evidence {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 12px;
+}
+.ev { color: var(--muted); margin: 3px 0; }
+.ev strong { color: var(--fg); }
+.peer {
+  display: inline-block;
+  margin-right: 16px;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+.empty { color: var(--muted); font-style: italic; padding: 16px; text-align: center; }
+footer { text-align: center; color: var(--muted); font-size: 11px; padding: 16px; }
+.nav a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.nav a:hover { color: var(--fg); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class='tag'>ENFORCER</span><span id='name'>loading&hellip;</span></h1>
+  <div class='stats'><span class='dot' id='dot'></span><span id='stats'></span></div>
+</header>
+<main>
+  <section>
+    <h2>Threat Board</h2>
+    <div id='threats'></div>
+  </section>
+  <section>
+    <h2>Enforcement Action</h2>
+    <div class='actions'>
+      <input id='qa-agent' placeholder='agent name'>
+      <input id='qa-reason' placeholder='reason (optional)' style='flex:1'>
+      <input id='qa-duration' placeholder='duration (s)' type='number' style='width:140px'>
+      <button class='primary' id='btn-quar'>Quarantine</button>
+      <button class='danger' id='btn-bl'>Blacklist</button>
+    </div>
+  </section>
+  <section>
+    <h2>Peers</h2>
+    <div id='peers'></div>
+  </section>
+</main>
+<footer>
+  <div class='nav'>
+    role: enforcer &middot; endpoints:
+    <a href='/health'>/health</a> &middot;
+    <a href='/threats'>/threats</a> &middot;
+    <a href='/peers'>/peers</a>
+  </div>
+  <div id='footer'>idle</div>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const get = (p) => fetch(p).then(r => r.json());
+const post = (p, b) => fetch(p, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(b),
+}).then(r => r.json());
+
+const fmtExpires = (ts) => {
+  if (!ts) return 'permanent';
+  const s = ts - Math.floor(Date.now() / 1000);
+  if (s <= 0) return 'expired';
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+};
+const badgeCls = (s) => ({ quarantined: 'q', blacklisted: 'b', warning: 'w', clean: 'c' })[s] || 'c';
+const threatCls = (s) => ({ quarantined: 'quar', blacklisted: 'bl', warning: 'warn' })[s] || '';
+
+const escMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
+escMap[String.fromCharCode(34)] = '&quot;';
+escMap[String.fromCharCode(39)] = '&#39;';
+const esc = (s) => String(s).replace(/[&<>'"]/g, (c) => escMap[c]);
+
+async function renderHealth() {
+  const h = await get('/health');
+  $('name').textContent = h.name;
+  const bad = (h.warnings + h.quarantined + h.blacklisted) > 0;
+  $('dot').classList.toggle('off', bad);
+  $('stats').innerHTML =
+    '<strong>' + h.peers + '</strong> peers &middot; ' +
+    '<strong>' + h.warnings + '</strong> warnings &middot; ' +
+    '<strong>' + h.quarantined + '</strong> quarantined &middot; ' +
+    '<strong>' + h.blacklisted + '</strong> blacklisted';
+}
+
+async function renderThreats() {
+  const list = await get('/threats');
+  const host = $('threats');
+  if (!list.length) {
+    host.innerHTML = '<div class=\'empty\'>No threats. Mesh is clean.</div>';
+    return;
+  }
+  host.innerHTML = list.map((t) => {
+    const liftBtn = (t.status === 'quarantined')
+      ? '<button data-action=\'lift\' data-agent=\'' + esc(t.name) + '\'>Lift Quarantine</button>'
+      : '';
+    return '<div class=\'threat ' + threatCls(t.status) + '\'>' +
+      '<div class=\'thead\'>' +
+        '<span class=\'tname\'>' + esc(t.name) + '</span>' +
+        '<span class=\'badge ' + badgeCls(t.status) + '\'>' + esc(t.status) + '</span>' +
+      '</div>' +
+      '<div class=\'treason\'>' +
+        (t.reason ? esc(t.reason) : '<em>no reason given</em>') +
+        (t.quarantine_expires > 0 ? ' &middot; expires in ' + fmtExpires(t.quarantine_expires) : '') +
+        ' &middot; <strong>' + t.evidence + '</strong> evidence' +
+        ' &middot; <strong>' + t.warnings + '</strong> warnings' +
+      '</div>' +
+      '<div class=\'row2\'>' + liftBtn +
+        '<button data-action=\'ev\' data-agent=\'' + esc(t.name) + '\'>Evidence</button>' +
+      '</div>' +
+      '<div class=\'evidence\' id=\'ev-' + esc(t.name) + '\' style=\'display:none\'></div>' +
+    '</div>';
+  }).join('');
+}
+
+async function renderPeers() {
+  const peers = await get('/peers');
+  const host = $('peers');
+  if (!peers.length) {
+    host.innerHTML = '<div class=\'empty\'>No peers seen yet.</div>';
+    return;
+  }
+  host.innerHTML = peers.map((p) => '<span class=\'peer\'>' + esc(p.name) + '</span>').join('');
+}
+
+async function refreshAll() {
+  try {
+    await Promise.all([renderHealth(), renderThreats(), renderPeers()]);
+    $('footer').textContent = 'refreshed ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('footer').textContent = 'error: ' + e.message;
+  }
+}
+
+async function doQuar() {
+  const agent = $('qa-agent').value.trim();
+  const reason = $('qa-reason').value.trim();
+  const dur = $('qa-duration').value.trim();
+  if (!agent) { alert('agent required'); return; }
+  const body = { agent };
+  if (reason) body.reason = reason;
+  if (dur) body.duration = parseInt(dur, 10);
+  const r = await post('/quarantine/node', body);
+  if (r.error) { alert(r.error); return; }
+  $('qa-agent').value = ''; $('qa-reason').value = ''; $('qa-duration').value = '';
+  refreshAll();
+}
+
+async function doBlacklist() {
+  const agent = $('qa-agent').value.trim();
+  const reason = $('qa-reason').value.trim();
+  if (!agent) { alert('agent required'); return; }
+  if (!confirm('Blacklist ' + agent + '? This is permanent.')) return;
+  const r = await post('/blacklist', { agent, reason: reason || 'blacklist' });
+  if (r.error) { alert(r.error); return; }
+  $('qa-agent').value = ''; $('qa-reason').value = '';
+  refreshAll();
+}
+
+async function doLift(agent) {
+  const r = await post('/quarantine/lift', { agent });
+  if (r.error) alert(r.error); else refreshAll();
+}
+
+async function showEv(agent) {
+  const box = document.getElementById('ev-' + agent);
+  if (!box) return;
+  if (box.style.display !== 'none') { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  const d = await get('/evidence?agent=' + encodeURIComponent(agent));
+  if (!d.evidence || !d.evidence.length) {
+    box.innerHTML = '<div class=\'ev\'>no evidence recorded</div>';
+    return;
+  }
+  box.innerHTML = d.evidence.map((e) =>
+    '<div class=\'ev\'>[' + new Date(e.ts * 1000).toLocaleTimeString() + '] ' +
+    '<strong>' + esc(e.type) + '</strong>: ' + esc(e.detail) + '</div>'
+  ).join('');
+}
+
+$('btn-quar').addEventListener('click', doQuar);
+$('btn-bl').addEventListener('click', doBlacklist);
+$('threats').addEventListener('click', (e) => {
+  const a = e.target.dataset.action;
+  const agent = e.target.dataset.agent;
+  if (!a) return;
+  if (a === 'lift') doLift(agent);
+  else if (a === 'ev') showEv(agent);
+});
+
+refreshAll();
+setInterval(refreshAll, 3000);
+</script>
+</body>
+</html>

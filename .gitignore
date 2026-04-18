@@ -29,3 +29,6 @@ roles/*/herald_agent.exe
 roles/*/oracle_agent.exe
 roles/*/sentient_agent.exe
 roles/*/worker_agent.exe
+
+# Embedded role UI — generated at build time from ui.html via `xxd -i`
+roles/*/ui.html.h

@@ -28,6 +28,15 @@
 #include <errno.h>
 
 #include "../../edge/compat.h"
+#include "../../edge/http_util.h"
+
+/* Embedded landing page, generated from ui.html via `xxd -i`. */
+#include "ui.html.h"
+
+/* Shared helpers live in edge/http_util.c; keep existing call-site names. */
+#define http_respond       http_send_json
+#define http_respond_html  http_send_html
+#define json_str           http_json_str
 
 #ifdef COMPAT_POSIX
 #include <sys/types.h>
@@ -608,82 +617,8 @@ static void cred_expire_check(void)
 }
 
 /* ── Minimal HTTP server ─────────────────────────────────────────────── */
-
-static int json_str(const char *json, const char *key,
-                    char *out_buf, size_t out_sz)
-{
-    if (!json || !key || !out_buf || out_sz == 0) {
-        return -1;
-    }
-
-    /* find "key" */
-    char needle[JSON_VAL_SZ];
-    snprintf(needle, sizeof(needle), "\"%s\"", key);
-
-    const char *p = strstr(json, needle);
-    if (!p) {
-        return -1;
-    }
-    p += strlen(needle);
-
-    /* skip whitespace and colon */
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
-    if (*p != ':') {
-        return -1;
-    }
-    p++;
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
-
-    /* expect opening quote */
-    if (*p != '"') {
-        return -1;
-    }
-    p++;
-
-    size_t written = 0;
-    while (*p && *p != '"') {
-        if (written < out_sz - 1) {
-            out_buf[written++] = *p;
-        }
-        p++;
-    }
-    out_buf[written] = '\0';
-
-    if (*p != '"') {
-        return -1;
-    }
-    return 0;
-}
-
-static void http_respond(compat_socket_t fd, int status, const char *body)
-{
-    const char *status_str;
-    switch (status) {
-    case 200: status_str = "OK";                    break;
-    case 400: status_str = "Bad Request";           break;
-    case 404: status_str = "Not Found";             break;
-    case 405: status_str = "Method Not Allowed";    break;
-    default:  status_str = "Internal Server Error"; break;
-    }
-
-    size_t body_len = body ? strlen(body) : 0;
-
-    char header[1024];
-    snprintf(header, sizeof(header),
-             "HTTP/1.0 %d %s\r\n"
-             "Content-Type: application/json\r\n"
-             "Content-Length: %zu\r\n"
-             "Access-Control-Allow-Origin: *\r\n"
-             "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
-             "Connection: close\r\n"
-             "\r\n",
-             status, status_str, body_len);
-
-    send(fd, header, strlen(header), 0);
-    if (body && body_len > 0) {
-        send(fd, body, body_len, 0);
-    }
-}
+/* json_str, http_respond, http_respond_html live in edge/http_util.c
+ * (see aliases at top of file). */
 
 /*
  * POST /credentials/request  body: {"agent":"NAME","role":"ROLE"}
@@ -931,7 +866,10 @@ static void http_serve_once(compat_socket_t server_fd)
     }
 
     /* dispatch */
-    if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0) {
+        http_respond_html(client_fd,
+                          (const char *)ui_html, (size_t)ui_html_len);
+    } else if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
         handle_health(client_fd);
     } else if (strcmp(method, "GET") == 0 &&
                strcmp(path, "/credentials") == 0) {

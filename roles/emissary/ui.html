@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Emissary</title>
+<style>
+:root {
+  --accent: #db61a2;
+  --accent-dim: #8a3666;
+  --ok: #3fb950;
+  --warn: #d29922;
+  --bad: #da3633;
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #21262d;
+  --fg: #c9d1d9;
+  --muted: #8b949e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg); color: var(--fg); line-height: 1.5;
+}
+header {
+  padding: 20px 32px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  background: linear-gradient(90deg, rgba(219,97,162,0.12), transparent);
+}
+h1 { margin: 0; font-size: 18px; font-weight: 600; }
+h1 .tag {
+  background: var(--accent); color: white; padding: 3px 10px;
+  border-radius: 3px; font-size: 11px; letter-spacing: 0.12em; margin-right: 10px;
+}
+.stats { font-size: 13px; color: var(--muted); }
+.stats strong { color: var(--fg); }
+.dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok); margin-right: 6px; vertical-align: middle;
+}
+main { padding: 24px 32px; max-width: 1100px; margin: 0 auto; }
+section {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 20px; margin-bottom: 16px;
+}
+.h2row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+h2 {
+  margin: 0; font-size: 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;
+}
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
+td { font-family: ui-monospace, monospace; font-size: 12px; }
+td.name { font-family: inherit; font-size: 13px; }
+tr:hover td { background: var(--bg); }
+button {
+  background: var(--border); color: var(--fg); border: 1px solid #30363d;
+  padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
+  font-family: inherit;
+}
+button:hover { background: #30363d; }
+button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+button.primary:hover { background: #e87ab4; }
+button.danger { background: var(--bad); border-color: var(--bad); color: white; }
+button.small { padding: 3px 10px; font-size: 12px; }
+input, textarea {
+  background: var(--bg); color: var(--fg); border: 1px solid #30363d;
+  padding: 7px 10px; border-radius: 4px; font-size: 13px; font-family: inherit;
+}
+input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+textarea { width: 100%; min-height: 80px; resize: vertical; font-family: inherit; }
+.form-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+.form-row label { color: var(--muted); font-size: 12px; width: 70px; }
+.empty { color: var(--muted); font-style: italic; padding: 16px; text-align: center; }
+footer { text-align: center; color: var(--muted); font-size: 11px; padding: 16px; }
+.nav a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.nav a:hover { color: var(--fg); }
+.msg { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); }
+.msg.ok { color: var(--ok); }
+.msg.bad { color: var(--bad); }
+.tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+.tab {
+  padding: 6px 14px; border: 1px solid var(--border); background: var(--bg);
+  border-radius: 4px 4px 0 0; cursor: pointer; font-size: 12px;
+  color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;
+}
+.tab.active { background: var(--card); color: var(--accent); border-color: var(--accent); }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class='tag'>EMISSARY</span><span id='name'>loading&hellip;</span></h1>
+  <div class='stats'><span class='dot'></span><span id='stats'></span></div>
+</header>
+<main>
+  <section>
+    <div class='tabs'>
+      <div class='tab active' data-tab='spec'>Submit Spec</div>
+      <div class='tab' data-tab='infer'>Infer (LLM)</div>
+    </div>
+    <div class='tab-panel active' id='panel-spec'>
+      <textarea id='sp-text' placeholder='Describe the program you want built. Sent to Architect as MSG_SPEC.'></textarea>
+      <div class='form-row' style='margin-top:8px'>
+        <button class='primary' id='btn-spec'>Queue to Architect</button>
+        <span class='msg' id='spec-msg'></span>
+      </div>
+    </div>
+    <div class='tab-panel' id='panel-infer'>
+      <textarea id='in-prompt' placeholder='Open-ended intent. Runs through Think + Code models, publishes spec.'></textarea>
+      <div class='form-row' style='margin-top:8px'>
+        <button class='primary' id='btn-infer'>Run Two-Stage Infer</button>
+        <span class='msg' id='infer-msg'></span>
+      </div>
+      <pre id='infer-out' style='display:none;margin-top:12px;padding:12px;background:var(--bg);border-radius:4px;font-family:ui-monospace,monospace;font-size:12px;color:var(--muted);white-space:pre-wrap'></pre>
+    </div>
+  </section>
+  <section>
+    <div class='h2row'>
+      <h2>Webhooks</h2>
+      <button class='small' id='btn-add-wh'>Add Webhook</button>
+    </div>
+    <div id='webhooks'></div>
+    <div id='wh-form' style='display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)'>
+      <div class='form-row'>
+        <label>url</label>
+        <input id='wh-url' placeholder='https://example.com/hook' style='flex:1'>
+      </div>
+      <div class='form-row'>
+        <label>events</label>
+        <input id='wh-events' placeholder='result,consensus'>
+        <button class='primary small' id='btn-save-wh'>Save</button>
+        <button class='small' id='btn-cancel-wh'>Cancel</button>
+      </div>
+      <div class='msg' id='wh-msg'></div>
+    </div>
+  </section>
+  <section>
+    <div class='h2row'>
+      <h2>Recent Results</h2>
+      <span class='msg' id='rcount'>&mdash;</span>
+    </div>
+    <div id='results'></div>
+  </section>
+  <section>
+    <h2>Peers</h2>
+    <div id='peers'></div>
+  </section>
+</main>
+<footer>
+  <div class='nav'>
+    role: emissary &middot; endpoints:
+    <a href='/health'>/health</a> &middot;
+    <a href='/status'>/status</a> &middot;
+    <a href='/webhooks'>/webhooks</a> &middot;
+    <a href='/results'>/results</a>
+  </div>
+  <div id='footer'>idle</div>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const get = (p) => fetch(p).then(r => r.json());
+const post = (p, b) => fetch(p, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(b),
+}).then(r => r.json());
+const del = (p) => fetch(p, { method: 'DELETE' }).then(r => r.json());
+
+const escMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
+escMap[String.fromCharCode(34)] = '&quot;';
+escMap[String.fromCharCode(39)] = '&#39;';
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>'"]/g, (c) => escMap[c]);
+
+async function renderHealth() {
+  const h = await get('/health');
+  $('name').textContent = h.name || 'emissary';
+  $('stats').innerHTML =
+    '<strong>' + (h.webhooks || 0) + '</strong> webhooks &middot; ' +
+    '<strong>' + (h.results || 0) + '</strong> results &middot; ' +
+    '<strong>' + (h.peers || 0) + '</strong> peers';
+}
+
+async function renderWebhooks() {
+  try {
+    const list = await get('/webhooks');
+    const items = Array.isArray(list) ? list : [];
+    const host = $('webhooks');
+    if (!items.length) {
+      host.innerHTML = '<div class=\'empty\'>No webhooks registered.</div>';
+      return;
+    }
+    const rows = items.map((w) =>
+      '<tr>' +
+        '<td>' + esc(w.id) + '</td>' +
+        '<td>' + esc(w.url) + '</td>' +
+        '<td>' + esc(w.events || '') + '</td>' +
+        '<td><button class=\'danger small\' data-wh=\'' + esc(w.id) + '\'>Delete</button></td>' +
+      '</tr>'
+    ).join('');
+    host.innerHTML =
+      '<table><thead><tr>' +
+        '<th>ID</th><th>URL</th><th>Events</th><th></th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+  } catch (e) {
+    $('webhooks').innerHTML = '<div class=\'empty\'>(/webhooks not available)</div>';
+  }
+}
+
+async function renderResults() {
+  try {
+    const list = await get('/results');
+    const items = Array.isArray(list) ? list : (list.results || []);
+    $('rcount').textContent = items.length + ' results';
+    const host = $('results');
+    if (!items.length) {
+      host.innerHTML = '<div class=\'empty\'>No results yet.</div>';
+      return;
+    }
+    const rows = items.slice(0, 30).map((r) =>
+      '<tr>' +
+        '<td>' + esc(r.phash || r.hash || '?') + '</td>' +
+        '<td>' + esc(r.source || r.agent || '?') + '</td>' +
+        '<td>' + (r.score != null ? r.score.toFixed(3) : '?') + '</td>' +
+      '</tr>'
+    ).join('');
+    host.innerHTML =
+      '<table><thead><tr>' +
+        '<th>Program</th><th>Source</th><th>Score</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+  } catch (e) {
+    $('results').innerHTML = '<div class=\'empty\'>(no results yet)</div>';
+    $('rcount').textContent = '';
+  }
+}
+
+async function renderPeers() {
+  try {
+    const peers = await get('/peers');
+    const list = Array.isArray(peers) ? peers : (peers.peers || []);
+    const host = $('peers');
+    if (!list.length) {
+      host.innerHTML = '<div class=\'empty\'>No peers seen.</div>';
+      return;
+    }
+    host.innerHTML = list.map((p) =>
+      '<span style=\'margin-right:16px;font-family:ui-monospace,monospace;font-size:13px\'>' +
+      esc(p.name || p) + '</span>'
+    ).join('');
+  } catch (e) {
+    $('peers').innerHTML = '';
+  }
+}
+
+async function refreshAll() {
+  try {
+    await Promise.all([renderHealth(), renderWebhooks(), renderResults(), renderPeers()]);
+    $('footer').textContent = 'refreshed ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('footer').textContent = 'error: ' + e.message;
+  }
+}
+
+async function doSpec() {
+  const spec = $('sp-text').value.trim();
+  if (!spec) { alert('spec required'); return; }
+  $('spec-msg').textContent = 'queueing&hellip;';
+  $('spec-msg').className = 'msg';
+  const r = await post('/spec', { spec });
+  if (r.error) {
+    $('spec-msg').textContent = 'error: ' + r.error;
+    $('spec-msg').className = 'msg bad';
+    return;
+  }
+  $('spec-msg').textContent = 'queued to Architect';
+  $('spec-msg').className = 'msg ok';
+  $('sp-text').value = '';
+}
+
+async function doInfer() {
+  const prompt = $('in-prompt').value.trim();
+  if (!prompt) { alert('prompt required'); return; }
+  $('infer-msg').textContent = 'running think + code&hellip;';
+  $('infer-msg').className = 'msg';
+  $('infer-out').style.display = 'none';
+  const r = await post('/infer', { prompt });
+  if (r.error) {
+    $('infer-msg').textContent = 'error: ' + r.error;
+    $('infer-msg').className = 'msg bad';
+    return;
+  }
+  $('infer-msg').textContent = r.queued ? 'queued to Architect' : 'no spec produced';
+  $('infer-msg').className = r.queued ? 'msg ok' : 'msg';
+  $('infer-out').style.display = 'block';
+  $('infer-out').textContent =
+    (r.reasoning ? 'Reasoning:\n' + r.reasoning + '\n\n' : '') +
+    (r.spec ? 'Spec:\n' + r.spec : '(no spec)');
+}
+
+async function saveWebhook() {
+  const url = $('wh-url').value.trim();
+  const events = $('wh-events').value.trim();
+  if (!url) { alert('url required'); return; }
+  const r = await post('/webhooks', { url, events });
+  if (r.error) {
+    $('wh-msg').textContent = 'error: ' + r.error;
+    $('wh-msg').className = 'msg bad';
+    return;
+  }
+  $('wh-msg').textContent = 'added id ' + (r.id != null ? r.id : '?');
+  $('wh-msg').className = 'msg ok';
+  $('wh-url').value = ''; $('wh-events').value = '';
+  $('wh-form').style.display = 'none';
+  refreshAll();
+}
+
+async function deleteWebhook(id) {
+  if (!confirm('Delete webhook ' + id + '?')) return;
+  const r = await del('/webhooks/' + encodeURIComponent(id));
+  if (r.error) alert(r.error); else refreshAll();
+}
+
+$('btn-spec').addEventListener('click', doSpec);
+$('btn-infer').addEventListener('click', doInfer);
+$('btn-add-wh').addEventListener('click', () => {
+  $('wh-form').style.display = 'block';
+});
+$('btn-cancel-wh').addEventListener('click', () => {
+  $('wh-form').style.display = 'none';
+});
+$('btn-save-wh').addEventListener('click', saveWebhook);
+$('webhooks').addEventListener('click', (e) => {
+  const id = e.target.dataset.wh;
+  if (id) deleteWebhook(id);
+});
+document.querySelectorAll('.tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+    tab.classList.add('active');
+    $('panel-' + tab.dataset.tab).classList.add('active');
+  });
+});
+
+refreshAll();
+setInterval(refreshAll, 4000);
+</script>
+</body>
+</html>

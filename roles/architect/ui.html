@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Architect</title>
+<style>
+:root {
+  --accent: #39c5cf;
+  --accent-dim: #1b848b;
+  --ok: #3fb950;
+  --bad: #da3633;
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #21262d;
+  --fg: #c9d1d9;
+  --muted: #8b949e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg); color: var(--fg); line-height: 1.5;
+}
+header {
+  padding: 20px 32px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  background: linear-gradient(90deg, rgba(57,197,207,0.12), transparent);
+}
+h1 { margin: 0; font-size: 18px; font-weight: 600; }
+h1 .tag {
+  background: var(--accent); color: black; padding: 3px 10px;
+  border-radius: 3px; font-size: 11px; letter-spacing: 0.12em; margin-right: 10px;
+}
+.stats { font-size: 13px; color: var(--muted); }
+.stats strong { color: var(--fg); }
+.dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok); margin-right: 6px; vertical-align: middle;
+}
+main { padding: 24px 32px; max-width: 1100px; margin: 0 auto; }
+section {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 20px; margin-bottom: 16px;
+}
+.h2row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+h2 {
+  margin: 0; font-size: 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;
+}
+.prog {
+  padding: 12px 14px; border-left: 3px solid var(--accent);
+  margin-bottom: 8px; background: var(--bg); border-radius: 0 4px 4px 0;
+  font-family: ui-monospace, monospace; font-size: 12px;
+}
+.prog .phash { font-weight: 600; color: var(--accent); }
+.prog .tpl { color: var(--muted); }
+.prog .src { float: right; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.tpl-chip {
+  display: inline-block;
+  padding: 4px 10px;
+  background: var(--border);
+  border: 1px solid #30363d;
+  border-radius: 20px;
+  margin: 3px 3px 0 0;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tpl-chip:hover { background: #30363d; color: var(--accent); }
+button {
+  background: var(--border); color: var(--fg); border: 1px solid #30363d;
+  padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
+  font-family: inherit;
+}
+button:hover { background: #30363d; }
+button.primary { background: var(--accent); border-color: var(--accent); color: black; }
+button.primary:hover { background: #4fd9e3; }
+textarea {
+  background: var(--bg); color: var(--fg); border: 1px solid #30363d;
+  padding: 7px 10px; border-radius: 4px; font-size: 13px;
+  font-family: ui-monospace, monospace; width: 100%; min-height: 80px; resize: vertical;
+}
+textarea:focus { outline: none; border-color: var(--accent); }
+.form-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+.peer {
+  display: inline-block; margin-right: 16px;
+  font-family: ui-monospace, monospace; font-size: 13px;
+}
+.empty { color: var(--muted); font-style: italic; padding: 16px; text-align: center; }
+footer { text-align: center; color: var(--muted); font-size: 11px; padding: 16px; }
+.nav a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.nav a:hover { color: var(--fg); }
+.msg { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); }
+.msg.ok { color: var(--ok); }
+.msg.bad { color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class='tag'>ARCHITECT</span><span id='name'>loading&hellip;</span></h1>
+  <div class='stats'><span class='dot'></span><span id='stats'></span></div>
+</header>
+<main>
+  <section>
+    <h2>Build from Spec</h2>
+    <textarea id='sp-text' placeholder='Paste a program spec here, or click a template below to pre-fill.'></textarea>
+    <div class='form-row'>
+      <button class='primary' id='btn-gen'>Build Program</button>
+      <span class='msg' id='gen-msg'></span>
+    </div>
+    <div id='templates' style='margin-top: 16px'></div>
+  </section>
+  <section>
+    <div class='h2row'>
+      <h2>Program Catalog</h2>
+      <span class='msg' id='ccount'>&mdash;</span>
+    </div>
+    <div id='catalog'></div>
+  </section>
+  <section>
+    <h2>Peers</h2>
+    <div id='peers'></div>
+  </section>
+</main>
+<footer>
+  <div class='nav'>
+    role: architect &middot; endpoints:
+    <a href='/health'>/health</a> &middot;
+    <a href='/catalog'>/catalog</a> &middot;
+    <a href='/templates'>/templates</a>
+  </div>
+  <div id='footer'>idle</div>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const get = (p) => fetch(p).then(r => r.json());
+const post = (p, b) => fetch(p, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(b),
+}).then(r => r.json());
+
+const escMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
+escMap[String.fromCharCode(34)] = '&quot;';
+escMap[String.fromCharCode(39)] = '&#39;';
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>'"]/g, (c) => escMap[c]);
+
+async function renderHealth() {
+  const h = await get('/health');
+  $('name').textContent = h.name || 'architect';
+  $('stats').innerHTML =
+    '<strong>' + (h.programs || h.catalog_count || 0) + '</strong> programs &middot; ' +
+    'llm: <strong>' + (h.llm ? 'on' : 'off') + '</strong>';
+}
+
+async function renderCatalog() {
+  try {
+    const list = await get('/catalog');
+    const items = Array.isArray(list) ? list : (list.entries || []);
+    $('ccount').textContent = items.length + ' programs';
+    const host = $('catalog');
+    if (!items.length) {
+      host.innerHTML = '<div class=\'empty\'>No programs built yet.</div>';
+      return;
+    }
+    host.innerHTML = items.slice(0, 50).map((p) =>
+      '<div class=\'prog\'>' +
+        '<span class=\'src\'>' + esc(p.source || 'template') + '</span>' +
+        '<span class=\'phash\'>' + esc(p.phash || p.hash || '?') + '</span>' +
+        (p.template ? ' <span class=\'tpl\'>&middot; ' + esc(p.template) + '</span>' : '') +
+        (p.spec ? '<div style=\'color:var(--muted);margin-top:4px\'>' + esc(p.spec).slice(0, 140) + '</div>' : '') +
+      '</div>'
+    ).join('');
+  } catch (e) {
+    $('catalog').innerHTML = '<div class=\'empty\'>(no catalog yet)</div>';
+    $('ccount').textContent = '';
+  }
+}
+
+async function renderTemplates() {
+  try {
+    const list = await get('/templates');
+    const items = Array.isArray(list) ? list : (list.templates || []);
+    const host = $('templates');
+    if (!items.length) { host.innerHTML = ''; return; }
+    host.innerHTML =
+      '<span style=\'color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em\'>Templates: </span>' +
+      items.map((t) => {
+        const name = typeof t === 'string' ? t : (t.name || '?');
+        return '<span class=\'tpl-chip\' data-tpl=\'' + esc(name) + '\'>' + esc(name) + '</span>';
+      }).join('');
+  } catch (e) {
+    $('templates').innerHTML = '';
+  }
+}
+
+async function renderPeers() {
+  try {
+    const peers = await get('/peers');
+    const list = Array.isArray(peers) ? peers : (peers.peers || []);
+    const host = $('peers');
+    if (!list.length) {
+      host.innerHTML = '<div class=\'empty\'>No peers seen yet.</div>';
+      return;
+    }
+    host.innerHTML = list.map((p) =>
+      '<span class=\'peer\'>' + esc(p.name || p) + '</span>'
+    ).join('');
+  } catch (e) {
+    $('peers').innerHTML = '';
+  }
+}
+
+async function refreshAll() {
+  try {
+    await Promise.all([renderHealth(), renderCatalog(), renderTemplates(), renderPeers()]);
+    $('footer').textContent = 'refreshed ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('footer').textContent = 'error: ' + e.message;
+  }
+}
+
+async function doGenerate() {
+  const spec = $('sp-text').value.trim();
+  if (!spec) { alert('spec required'); return; }
+  $('gen-msg').textContent = 'building&hellip;';
+  $('gen-msg').className = 'msg';
+  const r = await post('/generate', { spec });
+  if (r.error) {
+    $('gen-msg').textContent = 'error: ' + r.error;
+    $('gen-msg').className = 'msg bad';
+    return;
+  }
+  $('gen-msg').textContent = 'built: ' + (r.phash || r.hash || 'ok');
+  $('gen-msg').className = 'msg ok';
+  refreshAll();
+}
+
+$('btn-gen').addEventListener('click', doGenerate);
+$('templates').addEventListener('click', (e) => {
+  const name = e.target.dataset.tpl;
+  if (name) $('sp-text').value = name;
+});
+
+refreshAll();
+setInterval(refreshAll, 4000);
+</script>
+</body>
+</html>

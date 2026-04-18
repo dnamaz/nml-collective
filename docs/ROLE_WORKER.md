@@ -1,100 +1,86 @@
 # Role: Worker
 
-The muscle of the collective. Workers execute programs on their local data, submit data observations to quarantine, and report results for VOTE consensus. They are the compute layer — the more workers with diverse data, the stronger the consensus.
+The muscle of the collective. Workers execute signed programs against data fetched from the Custodian and report results for VOTE consensus. They are the compute layer — the more workers with diverse local state, the stronger the consensus.
 
 ## Identity
 
 | Property | Value |
 |----------|-------|
 | Flag | `--role worker` (default) |
-| Color | Green/Blue (`#3fb950` / `#58a6ff`) |
+| Color | Green (`#3fb950`) |
 | Executes programs | Yes |
 | Signs programs | No |
-| Votes on data | No (submits only) |
-| Embeds Nebula | No (uses sentient's) |
+| Ingests data | No (see Custodian) |
+| Votes on data | No |
+| Embeds Nebula | No (fetches approved objects from Custodian) |
 
 ## Responsibilities
 
 ### 1. Program Execution
 
-When a signed program arrives (via UDP, HTTP, or relay), the worker:
+When a signed program arrives (via MQTT or the UDP fallback), the worker:
 
 1. Verifies the signature (VRFY)
-2. Loads its local data into the program's named memory slots
-3. Runs TNET training on local data
-4. Performs forward-pass inference
-5. Stores the result (score, decision, memory state)
-6. Forwards the program to peers
+2. Fetches any referenced datasets from the Custodian (`GET /objects/<hash>`), caching locally
+3. Loads data into the program's named memory slots
+4. Runs TNET training on local data
+5. Performs forward-pass inference
+6. Publishes the score via `MSG_RESULT` for VOTE consensus
+7. Retains a short history of recent scores (see `GET /results`)
 
-Different workers see different data — that's the point. A US worker trains on US transactions, an EU worker on European ones. VOTE consensus combines diverse perspectives.
+Different workers run the same program against different cached datasets — that's the point. A US-region worker operating on US data and an EU-region worker on EU data will produce different scores; VOTE consensus combines their diverse perspectives.
 
-### 2. Data Submission
+### 2. Result Reporting
 
-Workers observe data in the real world and submit it to the collective:
+Workers expose their recent execution history via HTTP:
 
-```bash
-curl -X POST http://sentient:9001/data/submit \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "transactions_us_east",
-    "content": "shape=6,500 data=0.12,0.45,...",
-    "author": "worker_us",
-    "context": {
-      "description": "US East region transactions, March 2026",
-      "domain": "fraud_detection",
-      "features": ["amount", "frequency", "location_risk", "time_delta", "merchant_category", "card_age"],
-      "tags": ["us_east", "march"]
-    }
-  }'
-```
+- `GET /results` — newest-first JSON array of `{phash, score, ts}`
+- `GET /data/cache` — currently cached datasets (name, hash, size, status)
+- `GET /health`, `GET /peers` — standard
 
-Submitted data enters quarantine and must be approved by sentients (and optionally the oracle) before entering the data pool.
+The Oracle polls these endpoints to build its cross-agent assessment.
 
-### 3. Result Reporting
+## What Workers Do NOT Do
 
-Workers expose their execution results via `GET /results`. Other agents collect these during VOTE consensus.
+- **Ingest raw data.** All data ingestion goes through the [Custodian](ROLE_CUSTODIAN.md), which normalizes JSON/CSV into FLOAT32 NebulaDisk objects, shards large datasets, submits them to the Sentient for quarantine approval, and serves approved objects over HTTP. Workers fetch from the Custodian; they never accept external observations directly.
+- **Sign programs.** Only the Sentient holds the signing key.
+- **Vote on data quality.** The Sentient approves or rejects; the Oracle assesses advisorily.
+
+An embedded Worker running on observation hardware (e.g. a sensor) should still forward its observations to a nearby Custodian rather than submitting to the mesh directly — this keeps the ingestion surface narrow and well-tested. If a deployment genuinely needs direct worker ingestion (offline MCU, no Custodian reachable), that capability can be added back as an optional mode.
 
 ## Endpoints
 
-Workers use the standard collective endpoints — no worker-specific endpoints:
-
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/results` | GET | Execution results for all programs |
-| `/health` | GET | Agent status |
-| `/peers` | GET | Peer list |
+| `/` | GET | Role-tailored landing page (embedded HTML) |
+| `/health` | GET | Agent status: name, peers, results recorded, cache size |
+| `/results` | GET | Most recent 32 execution results |
+| `/data/cache` | GET | Current local dataset cache |
+| `/peers` | GET | Known mesh peers |
 
 ## Dashboard View
 
-The worker dashboard emphasizes execution and data:
+The Worker landing page (served at `/` by the Worker binary itself) emphasizes execution and data flow:
 
-- **My Results** — latest execution score, hash, exit code, success/failure
-- **Consensus bar** — VOTE result when requested
-- **Submit Data** — form with name, content, description, domain, tags, features
-- **Oracle section** — Ask panel (if oracle is in the collective)
-- **Bottom bar** — Broadcast Program, VOTE Consensus
+- **Recent Execution Results** — last 32 runs with program hash, score, age
+- **Local Data Cache** — names, hashes, sizes, cache status (ready / loading / rejected)
+- **Peers** — compact list
+- **Footer** — direct links to `/health`, `/results`, `/data/cache`, `/peers`
+
+Auto-refreshes every 3 seconds.
 
 ## Starting a Worker
 
 ```bash
-# Default role is worker
-python3 serve/nml_collective.py --name worker_us --port 9002 \
-    --seeds http://localhost:9001 --data demos/agent2.nml.data
-
-# Workers need local data (--data) to produce meaningful scores
+./roles/worker/worker_agent \
+    --name worker_us \
+    --port 9002 \
+    --broker 127.0.0.1 --broker-port 1883 \
+    --data demos/agent2.nml.data   # optional: preload a local dataset
 ```
 
-## Data Context
+If `--data` is omitted, the worker starts with an empty cache and fetches objects on demand from the Custodian when the first program references them.
 
-Workers should include rich context metadata with submissions:
+## Design Principle
 
-| Field | Purpose | Example |
-|-------|---------|---------|
-| `description` | Human-readable summary | "US East transactions March 2026" |
-| `domain` | Problem domain | "fraud_detection" |
-| `features` | Feature names matching shape | ["amount", "frequency", ...] |
-| `tags` | Searchable labels | ["us_east", "march", "batch_47"] |
-| `source` | Where the data came from | "worker_us" |
-| `time_range` | Time period covered | "2026-03-01 to 2026-03-15" |
-
-Context is stored alongside the binary data, indexed in SQLite, and encoded into vector embeddings for semantic search. The Oracle uses context to assess data quality during her auto-vote.
+The Worker's role is compute, not observation. This separation lets the Custodian stay the single source of truth for ingestion (one code path for sharding, approval, and serving), keeps the Worker binary small enough for embedded targets, and ensures the approval lifecycle can't be bypassed by a rogue observer.

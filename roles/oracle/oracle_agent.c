@@ -26,8 +26,15 @@
 
 /* Direct MQTT publish for custom topics (nml/assess/<phash>, nml/spec) */
 #include "../../edge/mqtt/mqtt.h"
+#include "../../edge/http_util.h"
 
 #include "compat.h"
+
+/* Embedded landing page, generated from ui.html via `xxd -i`. */
+#include "ui.html.h"
+
+/* Call-site aliases into the shared edge helpers. */
+#define http_send  http_send_json
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -656,10 +663,17 @@ static void maybe_publish_spec(void)
             assessed, avg_confidence, g_peers.count);
     }
 
-    mqtt_publish(&g_mqtt.client, "nml/spec",
-                 (const uint8_t *)spec, (size_t)spec_len,
-                 MQTT_PUBLISH_QOS_1);
-    mqtt_sync(&g_mqtt.client);
+    /* Encode as MSG_SPEC so the Architect's msg_parse path accepts it.
+     * Previously this used raw mqtt_publish, which made the Architect's
+     * msg_parse silently reject these packets — the Oracle→Architect loop
+     * was effectively broken. */
+    {
+        uint8_t pkt[NML_MAX_PROGRAM_LEN + 64];
+        int pkt_len = msg_encode(pkt, sizeof(pkt), MSG_SPEC,
+                                 g_agent_name, g_http_port, spec);
+        if (pkt_len > 0)
+            mqtt_transport_publish(&g_mqtt, MSG_SPEC, pkt, (size_t)pkt_len);
+    }
     printf("[oracle] published spec (assessed=%d avg_conf=%.3f llm=%d think=%d)\n",
            assessed, avg_confidence, used_llm, used_think);
 }
@@ -668,38 +682,9 @@ static void maybe_publish_spec(void)
 
 static compat_socket_t g_http_fd = COMPAT_INVALID_SOCKET;
 
-static compat_socket_t http_listen(uint16_t port)
-{
-    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd == COMPAT_INVALID_SOCKET) return COMPAT_INVALID_SOCKET;
-    int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, COMPAT_SOCKOPT_CAST(&one), sizeof(one));
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port        = htons(port);
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
-        listen(fd, 8) < 0) {
-        compat_close_socket(fd); return COMPAT_INVALID_SOCKET;
-    }
-    return fd;
-}
+/* http_listen lives in edge/http_util.c */
 
-static void http_send(compat_socket_t fd, int code, const char *body)
-{
-    char hdr[256];
-    int hdr_len = snprintf(hdr, sizeof(hdr),
-        "HTTP/1.1 %d %s\r\n"
-        "Content-Type: application/json\r\n"
-        "Content-Length: %zu\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
-        "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
-        "Connection: close\r\n\r\n",
-        code, code == 200 ? "OK" : "Error", strlen(body));
-    send(fd, hdr, (size_t)hdr_len, 0);
-    send(fd, body, strlen(body), 0);
-}
+/* http_send, http_send_html live in edge/http_util.c (see aliases above). */
 
 static void handle_http(compat_socket_t cfd)
 {
@@ -710,6 +695,12 @@ static void handle_http(compat_socket_t cfd)
 
     char method[8], path[256];
     if (sscanf(req, "%7s %255s", method, path) != 2) {
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET / — role-tailored landing page */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0) {
+        http_send_html(cfd, (const char *)ui_html, (size_t)ui_html_len);
         compat_close_socket(cfd); return;
     }
 
@@ -838,6 +829,62 @@ static void handle_http(compat_socket_t cfd)
         }
         publish_data_vote(hash, approve, reason);
         http_send(cfd, 200, "{\"ok\":true}");
+        compat_close_socket(cfd); return;
+    }
+
+    /*
+     * POST /spec  body: {"intent":"..."}
+     *
+     * Wrap the intent in a spec JSON and publish as MSG_SPEC so the Architect
+     * picks it up from nml/spec. This is the Oracle→Architect trigger: the
+     * Oracle decides what the collective should build, the Architect builds
+     * the NML program from it.
+     */
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/spec") == 0) {
+        char *body_start = strstr(req, "\r\n\r\n");
+        if (!body_start) {
+            http_send(cfd, 400, "{\"error\":\"no body\"}");
+            compat_close_socket(cfd); return;
+        }
+        body_start += 4;
+
+        char intent[512] = {0};
+        {
+            char *p = strstr(body_start, "\"intent\":");
+            if (p) {
+                p += 9;
+                while (*p == ' ' || *p == '"') p++;
+                int j = 0;
+                while (*p && *p != '"' && j < (int)sizeof(intent) - 1) {
+                    if (*p == '\\' && *(p + 1)) p++;   /* skip escape */
+                    intent[j++] = *p++;
+                }
+                intent[j] = '\0';
+            }
+        }
+        if (intent[0] == '\0') {
+            http_send(cfd, 400, "{\"error\":\"intent required\"}");
+            compat_close_socket(cfd); return;
+        }
+
+        /* Wrap the intent in the standard spec envelope. The Architect keys
+         * off the "spec" field and uses "source" for attribution. */
+        char spec_json[640];
+        int  sj_len = snprintf(spec_json, sizeof(spec_json),
+            "{\"source\":\"oracle-http\",\"spec\":\"%s\"}", intent);
+        (void)sj_len;
+
+        uint8_t pkt[NML_MAX_PROGRAM_LEN + 64];
+        int pkt_len = msg_encode(pkt, sizeof(pkt), MSG_SPEC,
+                                 g_agent_name, g_http_port, spec_json);
+        if (pkt_len < 0) {
+            http_send(cfd, 500, "{\"error\":\"spec too large\"}");
+            compat_close_socket(cfd); return;
+        }
+        mqtt_transport_publish(&g_mqtt, MSG_SPEC, pkt, (size_t)pkt_len);
+
+        printf("[oracle] /spec queued: %.60s\n", intent);
+        http_send(cfd, 201, "{\"ok\":true,\"queued\":true}");
         compat_close_socket(cfd); return;
     }
 

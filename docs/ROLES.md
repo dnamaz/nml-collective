@@ -58,7 +58,7 @@ graph TB
 flowchart LR
     subgraph inputs [Receives]
         i1["nml/submit\nprogram from Architect"]
-        i2["nml/data/submit\ndata from workers"]
+        i2["nml/data/submit\ndata from Custodian"]
         i3["nml/data/vote\nOracle approval"]
         i4["Enforcer --approve\nblacklist decision"]
     end

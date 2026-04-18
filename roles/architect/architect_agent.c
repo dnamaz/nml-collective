@@ -29,6 +29,7 @@
 #include "../../edge/mqtt/mqtt.h"
 
 #include "compat.h"
+#include "../../edge/http_util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,6 +37,11 @@
 #include <time.h>
 #include <stdint.h>
 #include <unistd.h>
+
+/* Embedded landing page, generated from ui.html via `xxd -i`. */
+#include "ui.html.h"
+
+#define http_send  http_send_json
 
 /* ── Constants ───────────────────────────────────────────────────────── */
 
@@ -130,28 +136,8 @@ static void catalog_add(const char *phash, const char *spec,
         strncpy(e->data_keys[i], data_keys[i], sizeof(e->data_keys[0]) - 1);
 }
 
-/* ── Simple JSON field extractor ─────────────────────────────────────── */
-
-static int json_str(const char *json, const char *key,
-                    char *out, size_t out_sz)
-{
-    if (!json || !key || !out || out_sz == 0) return -1;
-    char needle[128];
-    snprintf(needle, sizeof(needle), "\"%s\"", key);
-    const char *p = strstr(json, needle);
-    if (!p) return -1;
-    p += strlen(needle);
-    while (*p == ' ' || *p == ':' || *p == ' ') p++;
-    if (*p != '"') return -1;
-    p++;
-    size_t i = 0;
-    while (*p && *p != '"' && i < out_sz - 1) {
-        if (*p == '\\' && *(p + 1)) p++;
-        out[i++] = *p++;
-    }
-    out[i] = '\0';
-    return (int)i;
-}
+/* JSON field extractor lives in edge/http_util.c */
+#define json_str  http_json_str
 
 /* ── LLM program generation ──────────────────────────────────────────── */
 
@@ -673,39 +659,7 @@ static void handle_spec(const char *sender, const char *payload)
 
 static compat_socket_t g_http_fd = COMPAT_INVALID_SOCKET;
 
-static compat_socket_t http_listen(uint16_t port)
-{
-    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd == COMPAT_INVALID_SOCKET) return COMPAT_INVALID_SOCKET;
-    int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,
-               COMPAT_SOCKOPT_CAST(&one), sizeof(one));
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port        = htons(port);
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
-        listen(fd, 8) < 0) {
-        compat_close_socket(fd); return COMPAT_INVALID_SOCKET;
-    }
-    return fd;
-}
-
-static void http_send(compat_socket_t fd, int code, const char *body)
-{
-    char hdr[256];
-    int hdr_len = snprintf(hdr, sizeof(hdr),
-        "HTTP/1.1 %d %s\r\n"
-        "Content-Type: application/json\r\n"
-        "Content-Length: %zu\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
-        "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
-        "Connection: close\r\n\r\n",
-        code, code == 200 ? "OK" : "Error", strlen(body));
-    send(fd, hdr, (size_t)hdr_len, 0);
-    send(fd, body, strlen(body), 0);
-}
+/* http_listen, http_send (alias), http_send_html all live in edge/http_util.c */
 
 static void handle_http(compat_socket_t cfd)
 {
@@ -716,6 +670,12 @@ static void handle_http(compat_socket_t cfd)
 
     char method[8], path[256];
     if (sscanf(req, "%7s %255s", method, path) != 2) {
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET / — role-tailored landing page */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0) {
+        http_send_html(cfd, (const char *)ui_html, (size_t)ui_html_len);
         compat_close_socket(cfd); return;
     }
 

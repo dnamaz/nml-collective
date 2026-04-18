@@ -39,7 +39,11 @@
 #include "../../edge/peer_table.h"
 #include "../../edge/vote.h"
 #include "../../edge/http_client.h"
+#include "../../edge/http_util.h"
 #include "../../edge/mqtt_transport.h"
+
+/* Embedded landing page, generated from ui.html via `xxd -i`. */
+#include "ui.html.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,6 +101,32 @@ typedef struct {
 } DataCacheEntry;
 
 static DataCacheEntry g_cache[DATA_CACHE_MAX];
+
+/* ── Result history (for GET /results) ───────────────────────────────── */
+
+#define RESULT_HISTORY_MAX 32
+
+typedef struct {
+    char   phash[17];
+    char   score[32];
+    time_t ts;
+} ResultEntry;
+
+static ResultEntry g_results[RESULT_HISTORY_MAX];
+static int         g_results_head  = 0;   /* next slot to write */
+static int         g_results_count = 0;   /* total valid entries (<= MAX) */
+
+static void result_record(const char *phash, const char *score)
+{
+    ResultEntry *e = &g_results[g_results_head];
+    snprintf(e->phash, sizeof(e->phash), "%s", phash ? phash : "");
+    snprintf(e->score, sizeof(e->score), "%s", score ? score : "");
+    e->ts = time(NULL);
+    g_results_head = (g_results_head + 1) % RESULT_HISTORY_MAX;
+    if (g_results_count < RESULT_HISTORY_MAX) g_results_count++;
+}
+
+static compat_socket_t g_http_fd = COMPAT_INVALID_SOCKET;
 
 static void cache_free_entry(DataCacheEntry *e)
 {
@@ -192,26 +222,8 @@ static DataCacheEntry *cache_store(const char *name, const char *hash,
 
 /* ── JSON helper ─────────────────────────────────────────────────────── */
 
-static int json_str(const char *json, const char *key,
-                    char *out, size_t out_sz)
-{
-    if (!json || !key || !out || out_sz == 0) return -1;
-    char needle[128];
-    snprintf(needle, sizeof(needle), "\"%s\"", key);
-    const char *p = strstr(json, needle);
-    if (!p) return -1;
-    p += strlen(needle);
-    while (*p == ' ' || *p == ':') p++;
-    if (*p != '"') return -1;
-    p++;
-    size_t i = 0;
-    while (*p && *p != '"' && i < out_sz - 1) {
-        if (*p == '\\' && *(p + 1)) p++;
-        out[i++] = *p++;
-    }
-    out[i] = '\0';
-    return (int)i;
-}
+/* json_str was previously defined locally; now shared via http_util. */
+#define json_str http_json_str
 
 /* ── Helpers ─────────────────────────────────────────────────────────── */
 
@@ -584,6 +596,7 @@ static void send_result(const char *phash, const char *score_str)
     } else {
         report_send_udp(&g_udp, g_agent_name, g_agent_port, phash, score_str);
     }
+    result_record(phash, score_str);
 }
 
 static void send_msg(int type, const char *payload)
@@ -958,6 +971,115 @@ static void dispatch(int type, const char *peer_name, const char *sender_ip,
     }
 }
 
+/* ── HTTP server (uses shared edge/http_util) ─────────────────────────── */
+
+static void handle_http(compat_socket_t cfd)
+{
+    struct timeval tv = {10, 0};
+    setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO,
+               COMPAT_SOCKOPT_CAST(&tv), sizeof(tv));
+    setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO,
+               COMPAT_SOCKOPT_CAST(&tv), sizeof(tv));
+
+    static char req[16 * 1024];
+    int n = http_recv_full(cfd, req, sizeof(req), 64 * 1024);
+    if (n <= 0) { compat_close_socket(cfd); return; }
+
+    char method[8], path[256];
+    if (sscanf(req, "%7s %255s", method, path) != 2) {
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET / — role landing page */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0) {
+        http_send_html(cfd, (const char *)ui_html, (size_t)ui_html_len);
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET /health */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
+        int cached = 0;
+        for (int i = 0; i < DATA_CACHE_MAX; i++)
+            if (g_cache[i].valid) cached++;
+        char body[256];
+        snprintf(body, sizeof(body),
+            "{\"status\":\"ok\",\"name\":\"%s\","
+             "\"peers\":%d,\"results\":%d,\"cache\":%d}",
+            g_agent_name, g_peers.count, g_results_count, cached);
+        http_send_json(cfd, 200, body);
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET /peers */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/peers") == 0) {
+        char body[8192];
+        peer_list_json(&g_peers, body, sizeof(body));
+        http_send_json(cfd, 200, body);
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET /results — most-recent-first JSON array of (phash, score, ts) */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/results") == 0) {
+        char body[8192];
+        int pos = snprintf(body, sizeof(body), "[");
+        int emitted = 0;
+        /* Walk newest -> oldest: head is next write, so (head-1) is newest */
+        for (int i = 0; i < g_results_count; i++) {
+            int idx = (g_results_head - 1 - i + RESULT_HISTORY_MAX) % RESULT_HISTORY_MAX;
+            const ResultEntry *e = &g_results[idx];
+            if (emitted > 0 && (size_t)pos < sizeof(body))
+                pos += snprintf(body + pos, sizeof(body) - (size_t)pos, ",");
+            if ((size_t)pos < sizeof(body)) {
+                pos += snprintf(body + pos, sizeof(body) - (size_t)pos,
+                    "{\"phash\":\"%s\",\"score\":\"%s\",\"ts\":%ld}",
+                    e->phash, e->score, (long)e->ts);
+            }
+            emitted++;
+        }
+        if ((size_t)pos < sizeof(body))
+            snprintf(body + pos, sizeof(body) - (size_t)pos, "]");
+        http_send_json(cfd, 200, body);
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET /data/cache — current local dataset cache */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/data/cache") == 0) {
+        char body[4096];
+        int pos = snprintf(body, sizeof(body), "[");
+        int first = 1;
+        for (int i = 0; i < DATA_CACHE_MAX; i++) {
+            const DataCacheEntry *e = &g_cache[i];
+            if (e->name[0] == '\0' && !e->valid && !e->rejected) continue;
+            if (!first && (size_t)pos < sizeof(body))
+                pos += snprintf(body + pos, sizeof(body) - (size_t)pos, ",");
+            first = 0;
+            if ((size_t)pos < sizeof(body)) {
+                pos += snprintf(body + pos, sizeof(body) - (size_t)pos,
+                    "{\"name\":\"%s\",\"hash\":\"%s\","
+                     "\"size\":%zu,\"is_mmap\":%s,"
+                     "\"valid\":%s,\"rejected\":%s,\"last_used\":%ld}",
+                    e->name, e->hash, e->size,
+                    e->is_mmap  ? "true" : "false",
+                    e->valid    ? "true" : "false",
+                    e->rejected ? "true" : "false",
+                    (long)e->last_used);
+            }
+        }
+        if ((size_t)pos < sizeof(body))
+            snprintf(body + pos, sizeof(body) - (size_t)pos, "]");
+        http_send_json(cfd, 200, body);
+        compat_close_socket(cfd); return;
+    }
+
+    if (strcmp(method, "OPTIONS") == 0) {
+        http_send_json(cfd, 200, "{}");
+        compat_close_socket(cfd); return;
+    }
+
+    http_send_json(cfd, 404, "{\"error\":\"not found\"}");
+    compat_close_socket(cfd);
+}
+
 /* ── Main ────────────────────────────────────────────────────────────── */
 
 int main(int argc, char **argv)
@@ -1050,6 +1172,17 @@ int main(int argc, char **argv)
         printf("[%s] will fetch data '%s' from sentient on first program "
                "(or on nml/data/ready)\n", g_agent_name, g_data_name);
 
+    /* HTTP API server */
+    g_http_fd = http_listen(g_agent_port);
+    if (g_http_fd == COMPAT_INVALID_SOCKET) {
+        fprintf(stderr, "[%s] failed to bind HTTP on port %u\n",
+                g_agent_name, g_agent_port);
+        if (g_use_mqtt) mqtt_transport_close(&g_mqtt);
+        else            udp_close(&g_udp);
+        return 1;
+    }
+    printf("[%s] HTTP API on port %u\n", g_agent_name, g_agent_port);
+
     static uint8_t in_buf[65536];
     static char    peer_name[64];
     static char    payload[NML_MAX_PROGRAM_LEN + 1];
@@ -1062,8 +1195,24 @@ int main(int argc, char **argv)
     while (g_running) {
         time_t now = time(NULL);
 
+        /* HTTP accept with 1 s timeout — HTTP has to share the loop with the
+         * transport, so we use select() here and run the transport in
+         * non-blocking mode below. */
+        {
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(g_http_fd, &rfds);
+            struct timeval htv = {1, 0};
+            int sel = select(COMPAT_SELECT_NFDS(g_http_fd),
+                             &rfds, NULL, NULL, &htv);
+            if (sel > 0 && FD_ISSET(g_http_fd, &rfds)) {
+                compat_socket_t cfd = accept(g_http_fd, NULL, NULL);
+                if (cfd != COMPAT_INVALID_SOCKET) handle_http(cfd);
+            }
+        }
+
         if (g_use_mqtt) {
-            mqtt_transport_sync(&g_mqtt, 1000);
+            mqtt_transport_sync(&g_mqtt, 0);
 
             int pkt_len;
             while ((pkt_len = mqtt_transport_recv_ex(&g_mqtt, in_buf,
@@ -1098,7 +1247,8 @@ int main(int argc, char **argv)
             }
         } else {
             sender_ip[0] = '\0';
-            int received = udp_recv(&g_udp, in_buf, sizeof(in_buf), 1000, sender_ip);
+            /* Non-blocking — HTTP select above paced the loop. */
+            int received = udp_recv(&g_udp, in_buf, sizeof(in_buf), 0, sender_ip);
             if (received > 0) {
                 int      type;
                 uint16_t peer_port;
@@ -1124,6 +1274,9 @@ int main(int argc, char **argv)
     }
 
     printf("\n[%s] shutting down\n", g_agent_name);
+
+    if (g_http_fd != COMPAT_INVALID_SOCKET)
+        compat_close_socket(g_http_fd);
 
     /* Release cache */
     for (int i = 0; i < DATA_CACHE_MAX; i++)

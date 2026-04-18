@@ -185,6 +185,7 @@ sequenceDiagram
     participant A as Architect
     participant S as Sentient
     participant H as Herald
+    participant C as Custodian
     participant W1 as Worker 1 (US)
     participant W2 as Worker 2 (EU)
     participant N as Nebula
@@ -226,8 +227,8 @@ sequenceDiagram
     S->>EM: PUBLISH nml/committed/phash
     EM->>EM: Forward to webhooks / downstream
 
-    Note over W1: 9. New data arrives
-    W1->>S: PUBLISH nml/data/submit
+    Note over C: 9. New data arrives
+    C->>S: POST /data/submit
     O->>O: Analyze data quality
     O->>S: PUBLISH nml/data/vote approve
     S->>N: Promote to data pool
@@ -272,7 +273,7 @@ sequenceDiagram
 
 3. **Sign once, verify everywhere.** The authority signs a program once. Every agent verifies independently. No shared secrets, no trust assumptions, no central certificate authority.
 
-4. **Data is additive, not competitive.** Two workers submitting different data isn't a conflict — it's more perspectives. VOTE consensus is stronger with diversity.
+4. **Data is additive, not competitive.** Two datasets ingested from different sources isn't a conflict — it's more perspectives. VOTE consensus is stronger when workers compute over diverse data.
 
 5. **The collective never forgets.** Data is classified (approved, rejected, superseded), never deleted. Bad data trains the guards. The ledger is append-only.
 

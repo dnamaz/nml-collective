@@ -35,6 +35,13 @@
 #include "../../edge/mqtt/mqtt.h"
 
 #include "compat.h"
+#include "../../edge/http_util.h"
+
+/* Embedded landing page, generated from ui.html via `xxd -i`. */
+#include "ui.html.h"
+
+#define http_send  http_send_json
+#define json_str   http_json_str
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -155,27 +162,7 @@ static int rate_check(const char *ip)
 }
 
 /* ── Simple JSON helpers ─────────────────────────────────────────────── */
-
-static int json_str(const char *json, const char *key,
-                    char *out, size_t out_sz)
-{
-    if (!json || !key || !out || out_sz == 0) return -1;
-    char needle[128];
-    snprintf(needle, sizeof(needle), "\"%s\"", key);
-    const char *p = strstr(json, needle);
-    if (!p) return -1;
-    p += strlen(needle);
-    while (*p == ' ' || *p == ':') p++;
-    if (*p != '"') return -1;
-    p++;
-    size_t i = 0;
-    while (*p && *p != '"' && i < out_sz - 1) {
-        if (*p == '\\' && *(p + 1)) p++;
-        out[i++] = *p++;
-    }
-    out[i] = '\0';
-    return (int)i;
-}
+/* json_str lives in edge/http_util.c (see alias above). */
 
 static float json_float(const char *json, const char *key, float def)
 {
@@ -597,44 +584,7 @@ static void poll_oracle(void)
 
 static compat_socket_t g_http_fd = COMPAT_INVALID_SOCKET;
 
-static compat_socket_t http_listen(uint16_t port)
-{
-    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd == COMPAT_INVALID_SOCKET) return COMPAT_INVALID_SOCKET;
-    int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, COMPAT_SOCKOPT_CAST(&one), sizeof(one));
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port        = htons(port);
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
-        listen(fd, 16) < 0) {
-        compat_close_socket(fd); return COMPAT_INVALID_SOCKET;
-    }
-    return fd;
-}
-
-static void http_send(compat_socket_t fd, int code, const char *body)
-{
-    char hdr[512];
-    int hdr_len = snprintf(hdr, sizeof(hdr),
-        "HTTP/1.1 %d %s\r\n"
-        "Content-Type: application/json\r\n"
-        "Content-Length: %zu\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
-        "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
-        "Connection: close\r\n\r\n",
-        code, code == 200 ? "OK"
-             : code == 201 ? "Created"
-             : code == 401 ? "Unauthorized"
-             : code == 404 ? "Not Found"
-             : code == 429 ? "Too Many Requests"
-             : "Error",
-        strlen(body));
-    send(fd, hdr, (size_t)hdr_len, 0);
-    send(fd, body, strlen(body), 0);
-}
+/* http_listen, http_send, http_send_html live in edge/http_util.c */
 
 /*
  * Check Bearer token authentication.
@@ -671,6 +621,12 @@ static void handle_http(compat_socket_t cfd, const char *client_ip)
     /* OPTIONS preflight */
     if (strcmp(method, "OPTIONS") == 0) {
         http_send(cfd, 200, "{}");
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET / — role landing page (served before auth so browsers can reach it) */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0) {
+        http_send_html(cfd, (const char *)ui_html, (size_t)ui_html_len);
         compat_close_socket(cfd); return;
     }
 

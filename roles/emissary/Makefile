@@ -6,13 +6,16 @@ CC      ?= gcc
 CFLAGS  := -std=c99 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -I$(EDGE) -I$(EDGE)/mqtt
 TARGET  := emissary_agent$(PLATFORM_EXT)
 
-$(TARGET): emissary_agent.c $(LIB)
+$(TARGET): emissary_agent.c ui.html.h $(LIB)
 	$(CC) $(CFLAGS) -o $@ $< $(LIB) -lm $(PLATFORM_LIBS)
+
+ui.html.h: ui.html
+	xxd -i ui.html > ui.html.h
 
 $(LIB):
 	$(MAKE) -C $(EDGE) libcollective.a
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) ui.html.h
 
 .PHONY: clean

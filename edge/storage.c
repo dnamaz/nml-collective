@@ -26,7 +26,6 @@
 /* NebulaDisk magic bytes */
 #define NEBULA_MAGIC "\x4e\x4d\x4c\x02"  /* "NML\x02" */
 #define NEBULA_MAGIC_LEN 4
-#define DTYPE_TEXT 4
 
 /* ── Internal path helper ─────────────────────────────────────────────────── */
 
@@ -36,13 +35,36 @@ static void obj_path(const char *dir, const char *hash, char *out, size_t sz)
     snprintf(out, sz, "%s/objects/%.2s/%s.obj", dir, hash, hash);
 }
 
-/* ── storage_put ──────────────────────────────────────────────────────────── */
+/* ── Endian helpers ───────────────────────────────────────────────────────── */
 
-int storage_put(const char *dir, const char *content, size_t len,
-                int obj_type, const char *author, const char *name,
-                char *hash_out)
+static void u32_to_be(uint32_t v, uint8_t out[4])
+{
+    out[0] = (uint8_t)((v >> 24) & 0xFF);
+    out[1] = (uint8_t)((v >> 16) & 0xFF);
+    out[2] = (uint8_t)((v >>  8) & 0xFF);
+    out[3] = (uint8_t)((v      ) & 0xFF);
+}
+
+static uint32_t be_to_u32(const uint8_t in[4])
+{
+    return ((uint32_t)in[0] << 24) |
+           ((uint32_t)in[1] << 16) |
+           ((uint32_t)in[2] <<  8) |
+           ((uint32_t)in[3]      );
+}
+
+/* ── storage_put_shaped ───────────────────────────────────────────────────── */
+
+int storage_put_shaped(const char *dir, const char *content, size_t len,
+                       int obj_type, int dtype,
+                       int ndims, const uint32_t *shape,
+                       const char *author, const char *name,
+                       char *hash_out)
 {
     (void)name; /* name is metadata only; hash is the canonical key */
+
+    if (ndims < 0 || ndims > STORAGE_MAX_NDIMS) return -1;
+    if (ndims > 0 && shape == NULL) return -1;
 
     /* 1. Compute SHA-256(content) */
     uint8_t full_hash[32];
@@ -130,26 +152,29 @@ int storage_put(const char *dir, const char *content, size_t len,
         fwrite(ts_bytes, 1, 8, f);
     }
 
-    /* ndims: 0 as 1 byte */
+    /* ndims: 1 byte */
     {
-        uint8_t nd = 0;
+        uint8_t nd = (uint8_t)ndims;
         fwrite(&nd, 1, 1, f);
     }
 
-    /* dtype: 4 (DTYPE_TEXT) as 1 byte */
+    /* shape: ndims * 4 bytes, each uint32 big-endian */
+    for (int i = 0; i < ndims; i++) {
+        uint8_t dim_bytes[4];
+        u32_to_be(shape[i], dim_bytes);
+        fwrite(dim_bytes, 1, 4, f);
+    }
+
+    /* dtype: 1 byte */
     {
-        uint8_t dt = DTYPE_TEXT;
+        uint8_t dt = (uint8_t)dtype;
         fwrite(&dt, 1, 1, f);
     }
 
     /* content_len: (uint32_t)len written big-endian (4 bytes) */
     {
-        uint32_t clen = (uint32_t)len;
         uint8_t cl_bytes[4];
-        cl_bytes[0] = (uint8_t)((clen >> 24) & 0xFF);
-        cl_bytes[1] = (uint8_t)((clen >> 16) & 0xFF);
-        cl_bytes[2] = (uint8_t)((clen >>  8) & 0xFF);
-        cl_bytes[3] = (uint8_t)((clen      ) & 0xFF);
+        u32_to_be((uint32_t)len, cl_bytes);
         fwrite(cl_bytes, 1, 4, f);
     }
 
@@ -160,9 +185,24 @@ int storage_put(const char *dir, const char *content, size_t len,
     return 0;
 }
 
-/* ── Internal: skip to content_len field and return it ───────────────────── */
+/* ── storage_put (compat wrapper) ─────────────────────────────────────────── */
 
-static int read_content_len(FILE *f)
+int storage_put(const char *dir, const char *content, size_t len,
+                int obj_type, const char *author, const char *name,
+                char *hash_out)
+{
+    return storage_put_shaped(dir, content, len, obj_type,
+                              STORAGE_DTYPE_TEXT, 0, NULL,
+                              author, name, hash_out);
+}
+
+/* ── Internal: parse full header from an open FILE *. ─────────────────────
+ *
+ * On success, *out (if non-NULL) is populated and the file cursor is left at
+ * the first byte of the content payload.  Returns 0 on success, -1 on parse
+ * failure or premature EOF.
+ */
+static int read_header(FILE *f, StorageHeader *out)
 {
     uint8_t magic[NEBULA_MAGIC_LEN];
     if (fread(magic, 1, NEBULA_MAGIC_LEN, f) != NEBULA_MAGIC_LEN) return -1;
@@ -171,39 +211,65 @@ static int read_content_len(FILE *f)
     /* Skip hash_bytes (8 bytes) */
     if (fseek(f, 8, SEEK_CUR) != 0) return -1;
 
-    /* Read obj_type (1 byte, discard) */
+    /* obj_type (1 byte) */
     uint8_t obj_type_byte;
     if (fread(&obj_type_byte, 1, 1, f) != 1) return -1;
 
-    /* Read author_len (1 byte) */
+    /* author_len (1 byte) */
     uint8_t author_len;
     if (fread(&author_len, 1, 1, f) != 1) return -1;
 
-    /* Skip author + timestamp (author_len + 8 bytes) */
-    if (fseek(f, (long)(author_len + 8), SEEK_CUR) != 0) return -1;
-
-    /* Read ndims (1 byte) */
-    uint8_t ndims;
-    if (fread(&ndims, 1, 1, f) != 1) return -1;
-
-    /* Skip shape: ndims * 4 bytes */
-    if (ndims > 0) {
-        if (fseek(f, (long)(ndims * 4), SEEK_CUR) != 0) return -1;
+    /* author (author_len bytes) */
+    char author[64];
+    if (author_len > 0) {
+        size_t to_read = author_len < (uint8_t)sizeof(author) - 1
+                         ? author_len
+                         : (uint8_t)(sizeof(author) - 1);
+        if (fread(author, 1, to_read, f) != to_read) return -1;
+        author[to_read] = '\0';
+        /* Skip any excess we couldn't fit (shouldn't happen; cap is 63) */
+        if (to_read < author_len) {
+            if (fseek(f, (long)(author_len - to_read), SEEK_CUR) != 0) return -1;
+        }
+    } else {
+        author[0] = '\0';
     }
 
-    /* Skip dtype (1 byte) */
+    /* Skip timestamp (8 bytes) */
+    if (fseek(f, 8, SEEK_CUR) != 0) return -1;
+
+    /* ndims (1 byte) */
+    uint8_t ndims;
+    if (fread(&ndims, 1, 1, f) != 1) return -1;
+    if (ndims > STORAGE_MAX_NDIMS) return -1;
+
+    /* shape: ndims * 4 bytes, big-endian uint32 each */
+    uint32_t shape[STORAGE_MAX_NDIMS] = {0};
+    for (int i = 0; i < ndims; i++) {
+        uint8_t dim_bytes[4];
+        if (fread(dim_bytes, 1, 4, f) != 4) return -1;
+        shape[i] = be_to_u32(dim_bytes);
+    }
+
+    /* dtype (1 byte) */
     uint8_t dtype;
     if (fread(&dtype, 1, 1, f) != 1) return -1;
 
-    /* Read content_len: 4 bytes big-endian */
+    /* content_len (4 bytes big-endian) */
     uint8_t cl_bytes[4];
     if (fread(cl_bytes, 1, 4, f) != 4) return -1;
+    uint32_t clen = be_to_u32(cl_bytes);
 
-    uint32_t clen = ((uint32_t)cl_bytes[0] << 24) |
-                    ((uint32_t)cl_bytes[1] << 16) |
-                    ((uint32_t)cl_bytes[2] <<  8) |
-                    ((uint32_t)cl_bytes[3]      );
-    return (int)clen;
+    if (out) {
+        out->obj_type       = (int)obj_type_byte;
+        out->dtype          = (int)dtype;
+        out->ndims          = (int)ndims;
+        for (int i = 0; i < STORAGE_MAX_NDIMS; i++) out->shape[i] = shape[i];
+        memcpy(out->author, author, sizeof(out->author));
+        out->content_len    = (int)clen;
+        out->content_offset = ftell(f);
+    }
+    return 0;
 }
 
 /* ── storage_get ──────────────────────────────────────────────────────────── */
@@ -216,12 +282,13 @@ int storage_get(const char *dir, const char *hash, char *buf, size_t buf_sz)
     FILE *f = fopen(fpath, "rb");
     if (!f) return -1;
 
-    int clen = read_content_len(f);
-    if (clen < 0) {
+    StorageHeader h;
+    if (read_header(f, &h) != 0) {
         fclose(f);
         return -1;
     }
 
+    int clen = h.content_len;
     if ((size_t)clen >= buf_sz) {
         /* truncate to fit, leave room for NUL */
         clen = (int)(buf_sz - 1);
@@ -232,6 +299,23 @@ int storage_get(const char *dir, const char *hash, char *buf, size_t buf_sz)
 
     buf[n] = '\0';
     return (int)n;
+}
+
+/* ── storage_header ───────────────────────────────────────────────────────── */
+
+int storage_header(const char *dir, const char *hash, StorageHeader *out)
+{
+    if (!out) return -1;
+
+    char fpath[512];
+    obj_path(dir, hash, fpath, sizeof(fpath));
+
+    FILE *f = fopen(fpath, "rb");
+    if (!f) return -1;
+
+    int rc = read_header(f, out);
+    fclose(f);
+    return rc;
 }
 
 /* ── storage_path ─────────────────────────────────────────────────────────── */
@@ -267,38 +351,16 @@ int storage_exists(const char *dir, const char *hash)
 
 int storage_content_len(const char *dir, const char *hash)
 {
-    char fpath[512];
-    obj_path(dir, hash, fpath, sizeof(fpath));
-
-    FILE *f = fopen(fpath, "rb");
-    if (!f) return -1;
-
-    int clen = read_content_len(f);
-    fclose(f);
-    return clen;
+    StorageHeader h;
+    if (storage_header(dir, hash, &h) != 0) return -1;
+    return h.content_len;
 }
 
 /* ── storage_content_offset ──────────────────────────────────────────────── */
 
-/*
- * Return the byte offset from the start of the .obj file to the first byte of
- * the content payload.  This is the position immediately after the
- * content_len field in the NebulaDisk header.
- *
- * Returns >= 0 on success, -1 on parse failure.
- */
 long storage_content_offset(const char *dir, const char *hash)
 {
-    char fpath[512];
-    obj_path(dir, hash, fpath, sizeof(fpath));
-
-    FILE *f = fopen(fpath, "rb");
-    if (!f) return -1;
-
-    int clen = read_content_len(f);  /* positions file cursor at content start */
-    if (clen < 0) { fclose(f); return -1; }
-
-    long offset = ftell(f);
-    fclose(f);
-    return offset;
+    StorageHeader h;
+    if (storage_header(dir, hash, &h) != 0) return -1;
+    return h.content_offset;
 }

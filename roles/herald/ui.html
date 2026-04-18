@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Herald</title>
+<style>
+:root {
+  --accent: #bc8cff;
+  --accent-dim: #7c55c2;
+  --ok: #3fb950;
+  --warn: #d29922;
+  --bad: #da3633;
+  --bg: #0d1117;
+  --card: #161b22;
+  --border: #21262d;
+  --fg: #c9d1d9;
+  --muted: #8b949e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg); color: var(--fg); line-height: 1.5;
+}
+header {
+  padding: 20px 32px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  background: linear-gradient(90deg, rgba(188,140,255,0.12), transparent);
+}
+h1 { margin: 0; font-size: 18px; font-weight: 600; }
+h1 .tag {
+  background: var(--accent); color: black; padding: 3px 10px;
+  border-radius: 3px; font-size: 11px; letter-spacing: 0.12em; margin-right: 10px;
+}
+.stats { font-size: 13px; color: var(--muted); }
+.stats strong { color: var(--fg); }
+.dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok); margin-right: 6px; vertical-align: middle;
+}
+.dot.off { background: var(--bad); }
+main { padding: 24px 32px; max-width: 1100px; margin: 0 auto; }
+section {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 20px; margin-bottom: 16px;
+}
+.h2row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+h2 {
+  margin: 0; font-size: 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;
+}
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
+td { font-family: ui-monospace, monospace; }
+td.name { font-family: inherit; }
+tr:hover td { background: var(--bg); }
+.broker-card {
+  padding: 16px; background: var(--bg); border-radius: 4px;
+  font-family: ui-monospace, monospace; font-size: 13px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+}
+.broker-card .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+.broker-card .v { color: var(--fg); margin-top: 2px; }
+.broker-card .v.ok { color: var(--ok); }
+.broker-card .v.bad { color: var(--bad); }
+button {
+  background: var(--border); color: var(--fg); border: 1px solid #30363d;
+  padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
+  font-family: inherit;
+}
+button:hover { background: #30363d; }
+button.primary { background: var(--accent); border-color: var(--accent); color: black; }
+button.primary:hover { background: #cca4ff; }
+button.danger { background: var(--bad); border-color: var(--bad); color: white; }
+button.small { padding: 3px 10px; font-size: 12px; }
+input, select {
+  background: var(--bg); color: var(--fg); border: 1px solid #30363d;
+  padding: 7px 10px; border-radius: 4px; font-size: 13px; font-family: inherit;
+}
+input:focus { outline: none; border-color: var(--accent); }
+.form-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+.form-row label { color: var(--muted); font-size: 12px; width: 80px; }
+.empty { color: var(--muted); font-style: italic; padding: 16px; text-align: center; }
+footer { text-align: center; color: var(--muted); font-size: 11px; padding: 16px; }
+.nav a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+.nav a:hover { color: var(--fg); }
+.msg { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); }
+.msg.ok { color: var(--ok); }
+.msg.bad { color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class='tag'>HERALD</span><span id='name'>loading&hellip;</span></h1>
+  <div class='stats'><span class='dot' id='dot'></span><span id='stats'></span></div>
+</header>
+<main>
+  <section>
+    <h2>Broker Status</h2>
+    <div class='broker-card' id='broker'></div>
+  </section>
+  <section>
+    <h2>Issue Credential</h2>
+    <div class='form-row'>
+      <label>agent</label>
+      <input id='c-agent' placeholder='agent name' style='flex:1'>
+    </div>
+    <div class='form-row'>
+      <label>password</label>
+      <input id='c-pw' placeholder='password'>
+      <label>role</label>
+      <select id='c-role'>
+        <option value='worker'>worker</option>
+        <option value='sentient'>sentient</option>
+        <option value='oracle'>oracle</option>
+        <option value='architect'>architect</option>
+        <option value='enforcer'>enforcer</option>
+        <option value='custodian'>custodian</option>
+        <option value='emissary'>emissary</option>
+      </select>
+      <button class='primary' id='btn-issue'>Issue</button>
+      <button class='danger small' id='btn-revoke'>Revoke</button>
+    </div>
+    <div class='msg' id='cred-msg'></div>
+  </section>
+  <section>
+    <div class='h2row'>
+      <h2>Credentials</h2>
+      <span class='msg' id='ccount'>&mdash;</span>
+    </div>
+    <div id='credentials'></div>
+  </section>
+</main>
+<footer>
+  <div class='nav'>
+    role: herald &middot; endpoints:
+    <a href='/health'>/health</a> &middot;
+    <a href='/credentials'>/credentials</a>
+  </div>
+  <div id='footer'>idle</div>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const get = (p) => fetch(p).then(r => r.json());
+const post = (p, b) => fetch(p, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(b),
+}).then(r => r.json());
+
+const escMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
+escMap[String.fromCharCode(34)] = '&quot;';
+escMap[String.fromCharCode(39)] = '&#39;';
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>'"]/g, (c) => escMap[c]);
+
+async function renderHealth() {
+  const h = await get('/health');
+  $('name').textContent = h.name || 'herald';
+  const brokerUp = h.broker_running !== false;
+  $('dot').classList.toggle('off', !brokerUp);
+  $('stats').innerHTML =
+    'broker: <strong>' + (brokerUp ? 'up' : 'down') + '</strong> &middot; ' +
+    'restarts: <strong>' + (h.broker_restarts || 0) + '</strong>';
+
+  $('broker').innerHTML =
+    '<div><div class=\'k\'>MQTT port</div><div class=\'v\'>' + esc(h.broker_port || '—') + '</div></div>' +
+    '<div><div class=\'k\'>status</div><div class=\'v ' + (brokerUp ? 'ok' : 'bad') + '\'>' + (brokerUp ? 'running' : 'down') + '</div></div>' +
+    '<div><div class=\'k\'>restarts</div><div class=\'v\'>' + esc(h.broker_restarts || 0) + '</div></div>' +
+    '<div><div class=\'k\'>credentials issued</div><div class=\'v\'>' + esc(h.credentials || 0) + '</div></div>';
+}
+
+async function renderCredentials() {
+  try {
+    const list = await get('/credentials');
+    const items = Array.isArray(list) ? list : (list.credentials || []);
+    $('ccount').textContent = items.length + ' credentials';
+    const host = $('credentials');
+    if (!items.length) {
+      host.innerHTML = '<div class=\'empty\'>No credentials issued yet.</div>';
+      return;
+    }
+    const rows = items.map((c) =>
+      '<tr>' +
+        '<td class=\'name\'>' + esc(c.agent || c.name || '?') + '</td>' +
+        '<td>' + esc(c.role || '?') + '</td>' +
+        '<td>' + (c.issued_at ? new Date(c.issued_at * 1000).toLocaleString() : '?') + '</td>' +
+        '<td>' + esc(c.status || 'active') + '</td>' +
+      '</tr>'
+    ).join('');
+    host.innerHTML =
+      '<table><thead><tr>' +
+        '<th>Agent</th><th>Role</th><th>Issued</th><th>Status</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+  } catch (e) {
+    $('credentials').innerHTML = '<div class=\'empty\'>(/credentials not available)</div>';
+  }
+}
+
+async function refreshAll() {
+  try {
+    await Promise.all([renderHealth(), renderCredentials()]);
+    $('footer').textContent = 'refreshed ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('footer').textContent = 'error: ' + e.message;
+  }
+}
+
+async function doIssue() {
+  const agent = $('c-agent').value.trim();
+  const password = $('c-pw').value.trim();
+  const role = $('c-role').value;
+  if (!agent || !password) { alert('agent and password required'); return; }
+  $('cred-msg').textContent = 'issuing&hellip;';
+  $('cred-msg').className = 'msg';
+  const r = await post('/credentials/issue', { agent, password, role });
+  if (r.error) {
+    $('cred-msg').textContent = 'error: ' + r.error;
+    $('cred-msg').className = 'msg bad';
+    return;
+  }
+  $('cred-msg').textContent = 'issued ' + agent + ' as ' + role;
+  $('cred-msg').className = 'msg ok';
+  $('c-agent').value = ''; $('c-pw').value = '';
+  refreshAll();
+}
+
+async function doRevoke() {
+  const agent = $('c-agent').value.trim();
+  if (!agent) { alert('agent required'); return; }
+  if (!confirm('Revoke credential for ' + agent + '?')) return;
+  const r = await post('/credentials/revoke', { agent });
+  if (r.error) {
+    $('cred-msg').textContent = 'error: ' + r.error;
+    $('cred-msg').className = 'msg bad';
+    return;
+  }
+  $('cred-msg').textContent = 'revoked ' + agent;
+  $('cred-msg').className = 'msg ok';
+  refreshAll();
+}
+
+$('btn-issue').addEventListener('click', doIssue);
+$('btn-revoke').addEventListener('click', doRevoke);
+
+refreshAll();
+setInterval(refreshAll, 5000);
+</script>
+</body>
+</html>

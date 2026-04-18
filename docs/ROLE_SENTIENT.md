@@ -40,7 +40,7 @@ The private key stays local. Only the public key appears in the SIGN header. Any
 
 ### 2. Data Approval
 
-When workers submit data, it enters quarantine. Sentients review and vote:
+When the Custodian ingests data (on behalf of operators, workers, or external sources), it enters quarantine. Sentients review and vote:
 
 - **Approve** — data moves to the pool and feeds programs
 - **Reject** — data stays in quarantine as a negative example

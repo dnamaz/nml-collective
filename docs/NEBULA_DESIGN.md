@@ -82,12 +82,12 @@ sequenceDiagram
 
 ### Quarantine
 
-All worker-submitted data enters quarantine — untrusted by default. Data sits in quarantine until sentients vote on it.
+All ingested data enters quarantine — untrusted by default. Data is submitted by the Custodian (which handles JSON/CSV → FLOAT32 conversion, sharding, and manifests) and sits in quarantine until sentients vote on it.
 
 ```
 Quarantine Entry {
   hash:          content-addressed SHA-256
-  submitted_by:  worker name + signature
+  submitted_by:  custodian name + signature
   submitted_at:  timestamp
   content:       @name + shape + data
   status:        pending | approved | rejected | unreviewed
@@ -110,12 +110,12 @@ Auto-checks that pass fast-track sentient review. Auto-checks that fail can auto
 
 ### No Conflicts, No Merging
 
-Two workers submitting different data is not a conflict — it's more data. The collective doesn't need agreement on data. It needs agreement on results.
+Two datasets ingested from different sources is not a conflict — it's more data. The collective doesn't need agreement on data. It needs agreement on results.
 
 ```
-Worker A submits: @transactions_us_east     (500 rows)
-Worker B submits: @transactions_europe      (300 rows)
-Worker C submits: @transactions_asia        (200 rows)
+Custodian ingests: @transactions_us_east     (500 rows)
+Custodian ingests: @transactions_europe      (300 rows)
+Custodian ingests: @transactions_asia        (200 rows)
 
 These are three separate contributions.
 No merge. No ownership. No conflict.

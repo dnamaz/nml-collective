@@ -28,6 +28,15 @@
 #include "../../edge/peer_table.h"
 #include "../../edge/mqtt_transport.h"
 #include "../../edge/storage.h"
+#include "../../edge/chain.h"
+#include "../../edge/http_util.h"
+
+/* Embedded landing page, generated from ui.html via `xxd -i`. */
+#include "ui.html.h"
+
+/* Preserve existing call-site names; shared helpers live in http_util. */
+#define http_send  http_send_json
+#define json_str   http_json_str
 
 /* Direct MQTT publish for plain JSON topics */
 #include "../../edge/mqtt/mqtt.h"
@@ -88,6 +97,7 @@ static char    g_identity_payload[34];
 
 static MQTTTransport g_mqtt;
 static PeerTable     g_peers;
+static Chain         g_chain;
 
 static DataItem g_items[MAX_DATA_ITEMS];
 static int      g_item_count = 0;
@@ -101,28 +111,7 @@ static char g_sentient_host[128]   = "127.0.0.1";
 static uint16_t g_sentient_port    = 9001;
 static time_t g_stale_after        = STALE_DEFAULT_S;
 
-/* ── JSON helpers ────────────────────────────────────────────────────── */
-
-static int json_str(const char *json, const char *key,
-                    char *out, size_t out_sz)
-{
-    if (!json || !key || !out || out_sz == 0) return -1;
-    char needle[128];
-    snprintf(needle, sizeof(needle), "\"%s\"", key);
-    const char *p = strstr(json, needle);
-    if (!p) return -1;
-    p += strlen(needle);
-    while (*p == ' ' || *p == ':') p++;
-    if (*p != '"') return -1;
-    p++;
-    size_t i = 0;
-    while (*p && *p != '"' && i < out_sz - 1) {
-        if (*p == '\\' && *(p + 1)) p++;
-        out[i++] = *p++;
-    }
-    out[i] = '\0';
-    return (int)i;
-}
+/* JSON string extraction lives in edge/http_util.c (see #define above). */
 
 /* ── Data transformation ─────────────────────────────────────────────── */
 
@@ -496,6 +485,12 @@ static void on_approved(const char *hash)
         if (n > 0) manifest_each_shard(mj, approve_shard_cb, NULL);
     }
 
+    /* Record approval in the transaction chain */
+    char chain_payload[64];
+    int cp_len = snprintf(chain_payload, sizeof(chain_payload),
+                          "{\"hash\":\"%s\"}", hash);
+    chain_append(&g_chain, CHAIN_TX_DATA_APPROVE, chain_payload, (size_t)cp_len);
+
     /* Publish nml/data/ready so Workers know this object is available */
     char json[256];
     int n = snprintf(json, sizeof(json),
@@ -524,6 +519,12 @@ static void on_rejected(const char *hash)
         int n = storage_get(g_data_dir, hash, mj, sizeof(mj));
         if (n > 0) manifest_each_shard(mj, reject_shard_cb, NULL);
     }
+
+    /* Record rejection in the transaction chain */
+    char chain_payload[64];
+    int cp_len = snprintf(chain_payload, sizeof(chain_payload),
+                          "{\"hash\":\"%s\"}", hash);
+    chain_append(&g_chain, CHAIN_TX_DATA_REJECT, chain_payload, (size_t)cp_len);
 }
 
 /* ── Staleness monitoring ────────────────────────────────────────────── */
@@ -556,95 +557,16 @@ static void check_staleness(void)
     }
 }
 
+/* ── Ledger handlers live in edge/ledger_http.c (shared module) ───────── */
+
+#include "../../edge/ledger_http.h"
+
 /* ── HTTP server ─────────────────────────────────────────────────────── */
 
 static compat_socket_t g_http_fd = COMPAT_INVALID_SOCKET;
 
-static compat_socket_t http_listen(uint16_t port)
-{
-    compat_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd == COMPAT_INVALID_SOCKET) return COMPAT_INVALID_SOCKET;
-    int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, COMPAT_SOCKOPT_CAST(&one), sizeof(one));
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port        = htons(port);
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
-        listen(fd, 8) < 0) {
-        compat_close_socket(fd); return COMPAT_INVALID_SOCKET;
-    }
-    return fd;
-}
-
-static void http_send(compat_socket_t fd, int code, const char *body)
-{
-    char hdr[256];
-    int hdr_len = snprintf(hdr, sizeof(hdr),
-        "HTTP/1.1 %d %s\r\n"
-        "Content-Type: application/json\r\n"
-        "Content-Length: %zu\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
-        "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
-        "Connection: close\r\n\r\n",
-        code, code == 200 ? "OK" : code == 201 ? "Created" : "Error",
-        strlen(body));
-    send(fd, hdr, (size_t)hdr_len, 0);
-    send(fd, body, strlen(body), 0);
-}
-
-static void http_send_binary(compat_socket_t fd, const char *content_type,
-                              const char *data, size_t len)
-{
-    char hdr[256];
-    int hdr_len = snprintf(hdr, sizeof(hdr),
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: %s\r\n"
-        "Content-Length: %zu\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
-        "Connection: close\r\n\r\n",
-        content_type, len);
-    send(fd, hdr, (size_t)hdr_len, 0);
-    send(fd, data, len, 0);
-}
-
-/*
- * Read an HTTP request into buf, looping recv until the full body described
- * by Content-Length has arrived.  Returns total bytes received, -1 on I/O
- * error, or -2 if Content-Length exceeds max_body_sz.
- */
-static int http_recv_full(compat_socket_t cfd,
-                          char *buf, int buf_sz, int max_body_sz)
-{
-    int n = recv(cfd, buf, buf_sz - 1, 0);
-    if (n <= 0) return -1;
-    buf[n] = '\0';
-
-    const char *cl = strstr(buf, "Content-Length:");
-    if (!cl) cl = strstr(buf, "content-length:");
-    if (!cl) return n;
-
-    int content_length = atoi(cl + 15);
-    if (content_length <= 0) return n;
-    if (content_length > max_body_sz) return -2;
-
-    char *hdr_end = strstr(buf, "\r\n\r\n");
-    if (!hdr_end) return n;
-
-    int hdr_sz        = (int)(hdr_end + 4 - buf);
-    int body_received = n - hdr_sz;
-    int body_needed   = content_length - body_received;
-
-    while (body_needed > 0 && (n + body_needed) < buf_sz) {
-        int chunk = recv(cfd, buf + n, (size_t)body_needed, 0);
-        if (chunk <= 0) break;
-        n += chunk;
-        body_needed -= chunk;
-    }
-    buf[n] = '\0';
-    return n;
-}
+/* http_listen / http_send / http_send_html / http_send_binary /
+ * http_recv_full all live in edge/http_util.c — shared across roles. */
 
 static void handle_http(compat_socket_t cfd)
 {
@@ -666,6 +588,12 @@ static void handle_http(compat_socket_t cfd)
 
     char method[8], path[256];
     if (sscanf(req, "%7s %255s", method, path) != 2) {
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET / — role-tailored landing page */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0) {
+        http_send_html(cfd, (const char *)ui_html, (size_t)ui_html_len);
         compat_close_socket(cfd); return;
     }
 
@@ -903,11 +831,14 @@ static void handle_http(compat_socket_t cfd)
         char resp[512];
 
         if (n_floats <= SHARD_FLOAT_COUNT) {
-            /* ── Single object path (unchanged) ── */
+            /* ── Single object path ── */
             char hash[17];
-            if (storage_put(g_data_dir, (const char *)floats,
+            uint32_t shape[1] = { (uint32_t)n_floats };
+            if (storage_put_shaped(g_data_dir, (const char *)floats,
                             (size_t)n_floats * sizeof(float),
-                            STORAGE_OBJ_DATA, g_agent_name, name, hash) < 0) {
+                            STORAGE_OBJ_DATA, STORAGE_DTYPE_FLOAT32,
+                            1, shape,
+                            g_agent_name, name, hash) < 0) {
                 free(floats);
                 http_send(cfd, 500, "{\"error\":\"storage failed\"}");
                 compat_close_socket(cfd); return;
@@ -921,6 +852,15 @@ static void handle_http(compat_socket_t cfd)
                     compat_close_socket(cfd); return;
                 }
             }
+
+            /* Record ingestion in the transaction chain */
+            char chain_payload[256];
+            int cp_len = snprintf(chain_payload, sizeof(chain_payload),
+                "{\"hash\":\"%s\",\"name\":\"%s\",\"n_samples\":%d}",
+                hash, name, n_floats);
+            chain_append(&g_chain, CHAIN_TX_DATA_SUBMIT,
+                         chain_payload, (size_t)cp_len);
+
             char sentient_body[512];
             snprintf(sentient_body, sizeof(sentient_body),
                 "{\"name\":\"%s\",\"hash\":\"%s\","
@@ -965,10 +905,13 @@ static void handle_http(compat_socket_t cfd)
                 snprintf(shard_name, sizeof(shard_name), "%s_shard_%d", name, s);
 
                 char shash[17];
-                if (storage_put(g_data_dir,
+                uint32_t shard_shape[1] = { (uint32_t)shard_len };
+                if (storage_put_shaped(g_data_dir,
                                 (const char *)(floats + shard_start),
                                 (size_t)shard_len * sizeof(float),
-                                STORAGE_OBJ_DATA, g_agent_name, shard_name,
+                                STORAGE_OBJ_DATA, STORAGE_DTYPE_FLOAT32,
+                                1, shard_shape,
+                                g_agent_name, shard_name,
                                 shash) < 0) {
                     free(shard_hashes); free(floats);
                     http_send(cfd, 500, "{\"error\":\"shard storage failed\"}");
@@ -1044,6 +987,18 @@ static void handle_http(compat_socket_t cfd)
                     http_send(cfd, 503, "{\"error\":\"pool full\"}");
                     compat_close_socket(cfd); return;
                 }
+            }
+
+            /* Record ingestion in the transaction chain (manifest hash only;
+             * shards are an internal storage artifact, not a submission). */
+            {
+                char chain_payload[256];
+                int cp_len = snprintf(chain_payload, sizeof(chain_payload),
+                    "{\"hash\":\"%s\",\"name\":\"%s\","
+                     "\"n_samples\":%d,\"shards\":%d}",
+                    mhash, name, n_floats, n_shards);
+                chain_append(&g_chain, CHAIN_TX_DATA_SUBMIT,
+                             chain_payload, (size_t)cp_len);
             }
 
             char sentient_body[512];
@@ -1191,6 +1146,21 @@ static void handle_http(compat_socket_t cfd)
         compat_close_socket(cfd); return;
     }
 
+    /* GET /ledger/verify — shared handler */
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/ledger/verify") == 0) {
+        ledger_http_serve_verify(cfd, &g_chain);
+        compat_close_socket(cfd); return;
+    }
+
+    /* GET /ledger[?offset=N&limit=M] — shared handler */
+    if (strcmp(method, "GET") == 0 &&
+        (strcmp(path, "/ledger") == 0 ||
+         strncmp(path, "/ledger?", 8) == 0)) {
+        const char *qs = strchr(path, '?');
+        ledger_http_serve_index(cfd, &g_chain, qs ? qs + 1 : NULL);
+        compat_close_socket(cfd); return;
+    }
+
     if (strcmp(method, "OPTIONS") == 0) {
         http_send(cfd, 200, "{}");
         compat_close_socket(cfd); return;
@@ -1253,6 +1223,16 @@ int main(int argc, char *argv[])
 
     /* ── Storage ── */
     ensure_data_dir();
+
+    /* ── Transaction chain ── */
+    if (chain_open(g_data_dir, g_agent_name, &g_chain) != 0) {
+        fprintf(stderr, "[custodian] chain_open failed — refusing to start. "
+                        "Inspect or remove %s/agents/%s/chain.binlog.\n",
+                g_data_dir, g_agent_name);
+        return 1;
+    }
+    printf("[custodian] chain  path=%s  next_tx_id=%llu\n",
+           g_chain.path, (unsigned long long)g_chain.next_tx_id);
 
     /* ── Init tables ── */
     peer_table_init(&g_peers);
@@ -1363,6 +1343,7 @@ int main(int argc, char *argv[])
 
     printf("[custodian] shutting down\n");
     mqtt_transport_close(&g_mqtt);
+    chain_close(&g_chain);
     if (g_http_fd != COMPAT_INVALID_SOCKET) compat_close_socket(g_http_fd);
     compat_winsock_cleanup();
     return 0;
