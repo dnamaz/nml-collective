@@ -22,13 +22,10 @@ PeerEntry *peer_upsert(PeerTable *t, const char *name, const char *ip,
             t->entries[i].port      = port;
             t->entries[i].last_seen = now;
             if (ip && *ip) {
-                strncpy(t->entries[i].ip, ip, sizeof(t->entries[i].ip) - 1);
-                t->entries[i].ip[sizeof(t->entries[i].ip) - 1] = '\0';
+                snprintf(t->entries[i].ip, sizeof(t->entries[i].ip), "%s", ip);
             }
             if (identity && *identity) {
-                strncpy(t->entries[i].identity_payload, identity,
-                        sizeof(t->entries[i].identity_payload) - 1);
-                t->entries[i].identity_payload[sizeof(t->entries[i].identity_payload) - 1] = '\0';
+                snprintf(t->entries[i].identity_payload, sizeof(t->entries[i].identity_payload), "%s", identity);
             }
             return &t->entries[i];
         }
@@ -39,14 +36,14 @@ PeerEntry *peer_upsert(PeerTable *t, const char *name, const char *ip,
 
     PeerEntry *e = &t->entries[t->count++];
     memset(e, 0, sizeof(*e));
-    strncpy(e->name, name, sizeof(e->name) - 1);
+    snprintf(e->name, sizeof(e->name), "%s", name);
     if (ip && *ip)
-        strncpy(e->ip, ip, sizeof(e->ip) - 1);
+        snprintf(e->ip, sizeof(e->ip), "%s", ip);
     e->port      = port;
     e->last_seen = now;
     e->active    = 1;
     if (identity && *identity) {
-        strncpy(e->identity_payload, identity, sizeof(e->identity_payload) - 1);
+        snprintf(e->identity_payload, sizeof(e->identity_payload), "%s", identity);
     }
     return e;
 }
@@ -69,9 +66,7 @@ void peer_quarantine(PeerTable *t, const char *name, const char *reason)
         if (strncmp(t->entries[i].name, name, sizeof(t->entries[i].name) - 1) == 0) {
             t->entries[i].quarantined = 1;
             t->entries[i].active      = 0;
-            strncpy(t->entries[i].quarantine_reason, reason,
-                    sizeof(t->entries[i].quarantine_reason) - 1);
-            t->entries[i].quarantine_reason[sizeof(t->entries[i].quarantine_reason) - 1] = '\0';
+            snprintf(t->entries[i].quarantine_reason, sizeof(t->entries[i].quarantine_reason), "%s", reason);
             return;
         }
     }
@@ -80,11 +75,10 @@ void peer_quarantine(PeerTable *t, const char *name, const char *reason)
     if (t->count >= COLLECTIVE_MAX_PEERS) return;
     PeerEntry *e = &t->entries[t->count++];
     memset(e, 0, sizeof(*e));
-    strncpy(e->name, name, sizeof(e->name) - 1);
+    snprintf(e->name, sizeof(e->name), "%s", name);
     e->quarantined = 1;
     e->active      = 0;
-    strncpy(e->quarantine_reason, reason, sizeof(e->quarantine_reason) - 1);
-    e->quarantine_reason[sizeof(e->quarantine_reason) - 1] = '\0';
+    snprintf(e->quarantine_reason, sizeof(e->quarantine_reason), "%s", reason);
 }
 
 void peer_sweep(PeerTable *t, time_t now, time_t stale_after)

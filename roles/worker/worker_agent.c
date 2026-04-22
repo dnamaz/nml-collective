@@ -953,7 +953,7 @@ static void dispatch(int type, const char *peer_name, const char *sender_ip,
         if (*p == '|') p++;
         size_t nl = strcspn(p, "|");
         if (nl < sizeof(target)) { memcpy(target, p, nl); p += nl; }
-        if (*p == '|') { p++; strncpy(reason, p, sizeof(reason) - 1); }
+        if (*p == '|') { p++; snprintf(reason, sizeof(reason), "%s", p); }
 
         if (strncmp(type_str, "Q", 1) == 0) {
             peer_quarantine(&g_peers, target, reason);
@@ -1104,7 +1104,7 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "--require-signed") == 0) {
             require_signed = 1;
         } else if (strcmp(argv[i], "--broker") == 0 && i + 1 < argc) {
-            strncpy(broker_host, argv[++i], sizeof(broker_host) - 1);
+            snprintf(broker_host, sizeof(broker_host), "%s", argv[++i]);
             g_use_mqtt = 1;
         } else if (strcmp(argv[i], "--broker-port") == 0 && i + 1 < argc) {
             broker_port = (uint16_t)atoi(argv[++i]);

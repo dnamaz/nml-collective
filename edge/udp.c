@@ -3,6 +3,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 
 int udp_init(UDPContext *ctx, const char *mcast_group, uint16_t port)
 {
@@ -78,12 +79,17 @@ void udp_close(UDPContext *ctx)
 int udp_send(UDPContext *ctx, const char *mcast_group, uint16_t port,
              const uint8_t *buf, size_t len)
 {
+    /* Winsock's sendto takes int; reject rather than silently truncate.
+       (UDP's own payload cap is ~65507, so anything over INT_MAX is already
+       invalid at the protocol level.) */
+    if (len > (size_t)INT_MAX) return -1;
+
     struct sockaddr_in dst;
     memset(&dst, 0, sizeof(dst));
     dst.sin_family      = AF_INET;
     dst.sin_port        = htons(port);
     dst.sin_addr.s_addr = inet_addr(mcast_group);
-    return (int)sendto(ctx->send_fd, buf, len, 0,
+    return (int)sendto(ctx->send_fd, (const char *)buf, (int)len, 0,
                        (struct sockaddr *)&dst, sizeof(dst));
 }
 
@@ -104,7 +110,10 @@ int udp_recv(UDPContext *ctx, uint8_t *buf, size_t buf_sz, int timeout_ms,
 
     struct sockaddr_in src;
     socklen_t src_len = sizeof(src);
-    int n = (int)recvfrom(ctx->recv_fd, buf, buf_sz, 0,
+    /* Clamp buf_sz to INT_MAX for Winsock's int-typed length; this caps how
+       much the kernel may write, so it's safe wrt the caller's buffer. */
+    int recv_cap = (buf_sz > (size_t)INT_MAX) ? INT_MAX : (int)buf_sz;
+    int n = (int)recvfrom(ctx->recv_fd, (char *)buf, recv_cap, 0,
                           (struct sockaddr *)&src, &src_len);
     if (n > 0 && sender_ip_out) {
         inet_ntop(AF_INET, &src.sin_addr, sender_ip_out, 46);

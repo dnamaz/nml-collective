@@ -10,7 +10,7 @@ $(TARGET): architect_agent.c ui.html.h $(LIB)
 	$(CC) $(CFLAGS) -o $@ $< $(LIB) -lm $(PLATFORM_LIBS)
 
 ui.html.h: ui.html
-	xxd -i ui.html > ui.html.h
+	$(EMBED_CMD) ui.html ui.html.h
 
 $(LIB):
 	$(MAKE) -C $(EDGE) libcollective.a

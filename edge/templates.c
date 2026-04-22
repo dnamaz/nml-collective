@@ -117,9 +117,7 @@ static int emit_op3(char *out, size_t out_sz, int pos,
 static void add_key(TemplateParams *p, const char *key)
 {
     if (p->n_data_keys >= TEMPLATE_MAX_DATA_KEYS) return;
-    strncpy(p->data_keys[p->n_data_keys], key,
-            sizeof(p->data_keys[0]) - 1);
-    p->data_keys[p->n_data_keys][sizeof(p->data_keys[0]) - 1] = '\0';
+    snprintf(p->data_keys[p->n_data_keys], sizeof(p->data_keys[0]), "%s", key);
     p->n_data_keys++;
 }
 

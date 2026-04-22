@@ -65,11 +65,12 @@
 #define STALE_POLL_S         60      /* check for stale items every minute */
 #define STALE_PEER_S         30
 
-/* Data item status */
-#define STATUS_PENDING   0
-#define STATUS_APPROVED  1
-#define STATUS_REJECTED  2
-#define STATUS_SHARD     3  /* internal shard — approved alongside its manifest */
+/* Data item status.  Note: Windows <winnt.h> defines ITEM_PENDING, so we
+ * use an ITEM_* prefix to avoid the collision. */
+#define ITEM_PENDING   0
+#define ITEM_APPROVED  1
+#define ITEM_REJECTED  2
+#define ITEM_SHARD     3  /* internal shard — approved alongside its manifest */
 
 /* ── Types ───────────────────────────────────────────────────────────── */
 
@@ -268,7 +269,7 @@ static int meta_read(const char *hash, DataItem *out)
     if (!f) return -1;
 
     memset(out, 0, sizeof(*out));
-    strncpy(out->hash, hash, sizeof(out->hash) - 1);
+    snprintf(out->hash, sizeof(out->hash), "%s", hash);
 
     char line[256];
     while (fgets(line, sizeof(line), f)) {
@@ -280,9 +281,9 @@ static int meta_read(const char *hash, DataItem *out)
         const char *key = line;
         const char *val = eq + 1;
         if (strcmp(key, "name") == 0)
-            strncpy(out->name, val, sizeof(out->name) - 1);
+            snprintf(out->name, sizeof(out->name), "%s", val);
         else if (strcmp(key, "author") == 0)
-            strncpy(out->author, val, sizeof(out->author) - 1);
+            snprintf(out->author, sizeof(out->author), "%s", val);
         else if (strcmp(key, "n_samples") == 0)
             out->n_samples = atoi(val);
         else if (strcmp(key, "status") == 0)
@@ -386,7 +387,7 @@ static DataItem *item_add(const char *hash, const char *name,
     if (g_item_count >= MAX_DATA_ITEMS) {
         /* Pool full: evict the first rejected slot to make room */
         for (int i = 0; i < g_item_count; i++) {
-            if (g_items[i].status == STATUS_REJECTED) {
+            if (g_items[i].status == ITEM_REJECTED) {
                 it = &g_items[i];
                 break;
             }
@@ -396,11 +397,11 @@ static DataItem *item_add(const char *hash, const char *name,
         it = &g_items[g_item_count++];
     }
     memset(it, 0, sizeof(*it));
-    strncpy(it->hash,   hash,   sizeof(it->hash) - 1);
-    strncpy(it->name,   name,   sizeof(it->name) - 1);
-    strncpy(it->author, author, sizeof(it->author) - 1);
+    snprintf(it->hash, sizeof(it->hash), "%s", hash);
+    snprintf(it->name, sizeof(it->name), "%s", name);
+    snprintf(it->author, sizeof(it->author), "%s", author);
     it->n_samples    = n_samples;
-    it->status       = STATUS_PENDING;
+    it->status       = ITEM_PENDING;
     it->submitted_at = time(NULL);
     meta_write(it);
     return it;
@@ -453,8 +454,8 @@ static void approve_shard_cb(const char *shard_hash, void *ud)
     (void)ud;
     DataItem *s = item_find(shard_hash);
     if (!s) return;
-    if (s->status == STATUS_SHARD || s->status == STATUS_PENDING) {
-        s->status      = STATUS_APPROVED;
+    if (s->status == ITEM_SHARD || s->status == ITEM_PENDING) {
+        s->status      = ITEM_APPROVED;
         s->approved_at = time(NULL);
         meta_write(s);
     }
@@ -464,7 +465,7 @@ static void reject_shard_cb(const char *shard_hash, void *ud)
 {
     (void)ud;
     DataItem *s = item_find(shard_hash);
-    if (s) { s->status = STATUS_REJECTED; meta_write(s); }
+    if (s) { s->status = ITEM_REJECTED; meta_write(s); }
 }
 
 /* ── Approval + ready notification ──────────────────────────────────── */
@@ -473,9 +474,9 @@ static void on_approved(const char *hash)
 {
     DataItem *it = item_find(hash);
     if (!it) return;
-    if (it->status == STATUS_APPROVED) return;
+    if (it->status == ITEM_APPROVED) return;
 
-    it->status      = STATUS_APPROVED;
+    it->status      = ITEM_APPROVED;
     it->approved_at = time(NULL);
 
     /* If this is a manifest, promote all its shards too */
@@ -510,7 +511,7 @@ static void on_rejected(const char *hash)
 {
     DataItem *it = item_find(hash);
     if (!it) return;
-    it->status = STATUS_REJECTED;
+    it->status = ITEM_REJECTED;
     meta_write(it);
 
     /* If this is a manifest, also reject all its shards */
@@ -534,7 +535,7 @@ static void check_staleness(void)
     time_t now = time(NULL);
     for (int i = 0; i < g_item_count; i++) {
         DataItem *it = &g_items[i];
-        if (it->status != STATUS_APPROVED) continue;
+        if (it->status != ITEM_APPROVED) continue;
         time_t age = now - it->approved_at;
         if (age < g_stale_after) continue;
         /* Cooldown: don't re-alert until another full stale_after interval */
@@ -601,7 +602,7 @@ static void handle_http(compat_socket_t cfd)
     if (strcmp(method, "GET") == 0 && strcmp(path, "/health") == 0) {
         int approved = 0;
         for (int i = 0; i < g_item_count; i++)
-            if (g_items[i].status == STATUS_APPROVED) approved++;
+            if (g_items[i].status == ITEM_APPROVED) approved++;
         char body[256];
         snprintf(body, sizeof(body),
             "{\"status\":\"ok\",\"name\":\"%s\","
@@ -620,7 +621,7 @@ static void handle_http(compat_socket_t cfd)
         int first = 1;
         for (int i = 0; i < g_item_count; i++) {
             const DataItem *it = &g_items[i];
-            if (it->status == STATUS_SHARD) continue;
+            if (it->status == ITEM_SHARD) continue;
             if (!first) {
                 n = snprintf(body + pos, sizeof(body) - (size_t)pos, ",");
                 if (n > 0 && (size_t)(pos + n) < sizeof(body)) pos += n;
@@ -645,8 +646,8 @@ static void handle_http(compat_socket_t cfd)
                  "\"author\":\"%s\",\"n_samples\":%d,"
                  "\"status\":\"%s\",\"served\":%d%s}",
                 it->hash, it->name, it->author, it->n_samples,
-                it->status == STATUS_APPROVED ? "approved"
-                : it->status == STATUS_REJECTED ? "rejected" : "pending",
+                it->status == ITEM_APPROVED ? "approved"
+                : it->status == ITEM_REJECTED ? "rejected" : "pending",
                 it->served_count, extra);
             if (n > 0 && (size_t)(pos + n) < sizeof(body)) pos += n;
         }
@@ -678,7 +679,7 @@ static void handle_http(compat_socket_t cfd)
 
         {
             DataItem *auth_it = item_find(clean_hash);
-            if (auth_it && auth_it->status != STATUS_APPROVED) {
+            if (auth_it && auth_it->status != ITEM_APPROVED) {
                 http_send(cfd, 403, "{\"error\":\"not approved\"}");
                 compat_close_socket(cfd); return;
             }
@@ -875,9 +876,7 @@ static void handle_http(compat_socket_t cfd)
                 hash, n_floats);
             printf("[custodian] ingested '%s'  samples=%d  hash=%s\n",
                    name, n_floats, hash);
-            strncpy(resp_hash, hash, sizeof(resp_hash) - 1);
-            resp_hash[sizeof(resp_hash) - 1] = '\0';
-
+            snprintf(resp_hash, sizeof(resp_hash), "%s", hash);
         } else {
             /* ── Sharded manifest path ── */
             int n_shards = (n_floats + SHARD_FLOAT_COUNT - 1) / SHARD_FLOAT_COUNT;
@@ -919,7 +918,7 @@ static void handle_http(compat_socket_t cfd)
                 }
                 memcpy(shard_hashes[s], shash, 17);
 
-                /* Track shard as STATUS_SHARD — bypasses quarantine */
+                /* Track shard as ITEM_SHARD — bypasses quarantine */
                 DataItem *sit = item_find(shash);
                 if (!sit) {
                     sit = item_add(shash, shard_name, g_agent_name, shard_len);
@@ -928,7 +927,7 @@ static void handle_http(compat_socket_t cfd)
                         http_send(cfd, 503, "{\"error\":\"pool full\"}");
                         compat_close_socket(cfd); return;
                     }
-                    sit->status = STATUS_SHARD;
+                    sit->status = ITEM_SHARD;
                     meta_write(sit);
                 }
             }
@@ -1018,8 +1017,7 @@ static void handle_http(compat_socket_t cfd)
             printf("[custodian] ingested manifest '%s'  samples=%d"
                    "  shards=%d  hash=%s\n",
                    name, n_floats, n_shards, mhash);
-            strncpy(resp_hash, mhash, sizeof(resp_hash) - 1);
-            resp_hash[sizeof(resp_hash) - 1] = '\0';
+            snprintf(resp_hash, sizeof(resp_hash), "%s", mhash);
         }
 
         free(floats);
@@ -1099,7 +1097,7 @@ static void handle_http(compat_socket_t cfd)
                     char sobj[512], smeta[512];
                     if (storage_path(g_data_dir, shard_list[s], sobj, sizeof(sobj)) == 0)
                         remove(sobj);
-                    snprintf(smeta, sizeof(smeta), "%s/objects/%.2s/%s.meta",
+                    snprintf(smeta, sizeof(smeta), "%.255s/objects/%.2s/%.16s.meta",
                              g_data_dir, shard_list[s], shard_list[s]);
                     remove(smeta);
                     for (int k = 0; k < g_item_count; k++) {
@@ -1191,15 +1189,15 @@ int main(int argc, char *argv[])
         if (strcmp(argv[i], "--name") == 0 && i + 1 < argc)
             g_agent_name = argv[++i];
         else if (strcmp(argv[i], "--broker") == 0 && i + 1 < argc)
-            strncpy(g_broker_host, argv[++i], sizeof(g_broker_host) - 1);
+            snprintf(g_broker_host, sizeof(g_broker_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--broker-port") == 0 && i + 1 < argc)
             g_broker_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc)
             g_http_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--data-dir") == 0 && i + 1 < argc)
-            strncpy(g_data_dir, argv[++i], sizeof(g_data_dir) - 1);
+            snprintf(g_data_dir, sizeof(g_data_dir), "%s", argv[++i]);
         else if (strcmp(argv[i], "--sentient") == 0 && i + 1 < argc)
-            strncpy(g_sentient_host, argv[++i], sizeof(g_sentient_host) - 1);
+            snprintf(g_sentient_host, sizeof(g_sentient_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--sentient-port") == 0 && i + 1 < argc)
             g_sentient_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--stale-after") == 0 && i + 1 < argc)

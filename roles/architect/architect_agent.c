@@ -125,15 +125,15 @@ static void catalog_add(const char *phash, const char *spec,
         e = &g_catalog.entries[g_catalog.next % MAX_CATALOG_ENTRIES];
         g_catalog.next++;
     }
-    strncpy(e->phash,  phash, sizeof(e->phash) - 1);
-    strncpy(e->spec,   spec,  sizeof(e->spec) - 1);
+    snprintf(e->phash, sizeof(e->phash), "%s", phash);
+    snprintf(e->spec, sizeof(e->spec), "%s", spec);
     e->provenance   = prov;
     e->template_id  = template_id;
     e->generated_at = time(NULL);
     e->validated    = validated;
     e->n_data_keys  = n_data_keys < TEMPLATE_MAX_DATA_KEYS ? n_data_keys : TEMPLATE_MAX_DATA_KEYS;
     for (int i = 0; i < e->n_data_keys; i++)
-        strncpy(e->data_keys[i], data_keys[i], sizeof(e->data_keys[0]) - 1);
+        snprintf(e->data_keys[i], sizeof(e->data_keys[0]), "%s", data_keys[i]);
 }
 
 /* JSON field extractor lives in edge/http_util.c */
@@ -356,8 +356,8 @@ static void fill_default_params(TemplateParams *p, int template_id)
     p->epochs         = 100;
     p->lr_scaled      = 100;    /* 0.01 */
     p->training_mode  = 1;      /* train on local data, then infer */
-    strncpy(p->input_key,  "new_transaction", sizeof(p->input_key)  - 1);
-    strncpy(p->output_key, "fraud_score",     sizeof(p->output_key) - 1);
+    snprintf(p->input_key, sizeof(p->input_key), "%s", "new_transaction");
+    snprintf(p->output_key, sizeof(p->output_key), "%s", "fraud_score");
 }
 
 static int generate_from_template(const char *intent,
@@ -496,7 +496,7 @@ static void handle_spec(const char *sender, const char *payload)
     char intent[256] = {0};
     if (json_str(payload, "spec", intent, sizeof(intent)) <= 0) {
         /* Treat raw payload as intent if JSON extraction fails */
-        strncpy(intent, payload, sizeof(intent) - 1);
+        snprintf(intent, sizeof(intent), "%s", payload);
     }
     if (intent[0] == '\0') return;
 
@@ -554,8 +554,7 @@ static void handle_spec(const char *sender, const char *payload)
             snprintf(enriched, sizeof(enriched),
                 "Context: %.300s Intent: %.200s", context, intent);
         } else {
-            strncpy(enriched, intent, sizeof(enriched) - 1);
-            enriched[sizeof(enriched) - 1] = '\0';
+            snprintf(enriched, sizeof(enriched), "%s", intent);
         }
 
         /* Stage 3: Code model generates NML with validation retry loop */
@@ -833,39 +832,39 @@ int main(int argc, char *argv[])
         if (strcmp(argv[i], "--name") == 0 && i + 1 < argc)
             g_agent_name = argv[++i];
         else if (strcmp(argv[i], "--broker") == 0 && i + 1 < argc)
-            strncpy(g_broker_host, argv[++i], sizeof(g_broker_host) - 1);
+            snprintf(g_broker_host, sizeof(g_broker_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--broker-port") == 0 && i + 1 < argc)
             g_broker_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc)
             g_http_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--llm-host") == 0 && i + 1 < argc)
-            strncpy(g_llm_host, argv[++i], sizeof(g_llm_host) - 1);
+            snprintf(g_llm_host, sizeof(g_llm_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--llm-port") == 0 && i + 1 < argc)
             g_llm_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--llm-path") == 0 && i + 1 < argc)
-            strncpy(g_llm_path, argv[++i], sizeof(g_llm_path) - 1);
+            snprintf(g_llm_path, sizeof(g_llm_path), "%s", argv[++i]);
         else if (strcmp(argv[i], "--think-host") == 0 && i + 1 < argc)
-            strncpy(g_think_host, argv[++i], sizeof(g_think_host) - 1);
+            snprintf(g_think_host, sizeof(g_think_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--think-port") == 0 && i + 1 < argc)
             g_think_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--think-path") == 0 && i + 1 < argc)
-            strncpy(g_think_path, argv[++i], sizeof(g_think_path) - 1);
+            snprintf(g_think_path, sizeof(g_think_path), "%s", argv[++i]);
         else if (strcmp(argv[i], "--think-model") == 0 && i + 1 < argc)
-            strncpy(g_think_model, argv[++i], sizeof(g_think_model) - 1);
+            snprintf(g_think_model, sizeof(g_think_model), "%s", argv[++i]);
         else if (strcmp(argv[i], "--llm-api-key") == 0 && i + 1 < argc)
-            strncpy(g_llm_api_key, argv[++i], sizeof(g_llm_api_key) - 1);
+            snprintf(g_llm_api_key, sizeof(g_llm_api_key), "%s", argv[++i]);
         else if (strcmp(argv[i], "--llm-model") == 0 && i + 1 < argc)
-            strncpy(g_llm_model, argv[++i], sizeof(g_llm_model) - 1);
+            snprintf(g_llm_model, sizeof(g_llm_model), "%s", argv[++i]);
         else if (strcmp(argv[i], "--llm-provider") == 0 && i + 1 < argc)
-            strncpy(g_llm_provider, argv[++i], sizeof(g_llm_provider) - 1);
+            snprintf(g_llm_provider, sizeof(g_llm_provider), "%s", argv[++i]);
         else if (strcmp(argv[i], "--code-host") == 0 && i + 1 < argc)
-            strncpy(g_code_host, argv[++i], sizeof(g_code_host) - 1);
+            snprintf(g_code_host, sizeof(g_code_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--code-port") == 0 && i + 1 < argc)
             g_code_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--code-path") == 0 && i + 1 < argc)
-            strncpy(g_code_path, argv[++i], sizeof(g_code_path) - 1);
+            snprintf(g_code_path, sizeof(g_code_path), "%s", argv[++i]);
         else if (strcmp(argv[i], "--code-model") == 0 && i + 1 < argc)
-            strncpy(g_code_model, argv[++i], sizeof(g_code_model) - 1);
+            snprintf(g_code_model, sizeof(g_code_model), "%s", argv[++i]);
         else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]); return 0;
         }

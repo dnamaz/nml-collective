@@ -148,7 +148,7 @@ static AgentStat *stat_get_or_create(const char *name)
     if (g_stats.count >= MAX_AGENT_STATS) return NULL;
     AgentStat *s = &g_stats.entries[g_stats.count++];
     memset(s, 0, sizeof(*s));
-    strncpy(s->name, name, sizeof(s->name) - 1);
+    snprintf(s->name, sizeof(s->name), "%s", name);
     s->confidence = 1.0f;   /* new agents start fully trusted */
     return s;
 }
@@ -183,7 +183,7 @@ static OracleSession *oracle_get_or_create(const char *phash)
     }
     OracleSession *s = &g_oracle.sessions[g_oracle.count++];
     memset(s, 0, sizeof(*s));
-    strncpy(s->phash, phash, sizeof(s->phash) - 1);
+    snprintf(s->phash, sizeof(s->phash), "%s", phash);
     s->first_seen = time(NULL);
     s->confidence = 1.0f;
     return s;
@@ -197,7 +197,7 @@ static void oracle_add_vote(OracleSession *s, const char *voter, float score)
     }
     if (s->count >= ORACLE_MAX_VOTES) return;
     OracleVote *v = &s->votes[s->count++];
-    strncpy(v->voter, voter, sizeof(v->voter) - 1);
+    snprintf(v->voter, sizeof(v->voter), "%s", voter);
     v->score      = score;
     v->is_outlier = 0;
 }
@@ -921,7 +921,7 @@ int main(int argc, char *argv[])
         if (strcmp(argv[i], "--name") == 0 && i + 1 < argc)
             g_agent_name = argv[++i];
         else if (strcmp(argv[i], "--broker") == 0 && i + 1 < argc)
-            strncpy(g_broker_host, argv[++i], sizeof(g_broker_host) - 1);
+            snprintf(g_broker_host, sizeof(g_broker_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--broker-port") == 0 && i + 1 < argc)
             g_broker_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc)
@@ -929,35 +929,35 @@ int main(int argc, char *argv[])
         else if (strcmp(argv[i], "--quorum") == 0 && i + 1 < argc)
             g_quorum = atoi(argv[++i]);
         else if (strcmp(argv[i], "--llm-host") == 0 && i + 1 < argc)
-            strncpy(g_llm_host, argv[++i], sizeof(g_llm_host) - 1);
+            snprintf(g_llm_host, sizeof(g_llm_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--llm-port") == 0 && i + 1 < argc)
             g_llm_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--llm-path") == 0 && i + 1 < argc)
-            strncpy(g_llm_path, argv[++i], sizeof(g_llm_path) - 1);
+            snprintf(g_llm_path, sizeof(g_llm_path), "%s", argv[++i]);
         else if (strcmp(argv[i], "--think-host") == 0 && i + 1 < argc)
-            strncpy(g_think_host, argv[++i], sizeof(g_think_host) - 1);
+            snprintf(g_think_host, sizeof(g_think_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--think-port") == 0 && i + 1 < argc)
             g_think_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--think-path") == 0 && i + 1 < argc)
-            strncpy(g_think_path, argv[++i], sizeof(g_think_path) - 1);
+            snprintf(g_think_path, sizeof(g_think_path), "%s", argv[++i]);
         else if (strcmp(argv[i], "--think-model") == 0 && i + 1 < argc)
-            strncpy(g_think_model, argv[++i], sizeof(g_think_model) - 1);
+            snprintf(g_think_model, sizeof(g_think_model), "%s", argv[++i]);
         else if (strcmp(argv[i], "--llm-api-key") == 0 && i + 1 < argc)
-            strncpy(g_llm_api_key, argv[++i], sizeof(g_llm_api_key) - 1);
+            snprintf(g_llm_api_key, sizeof(g_llm_api_key), "%s", argv[++i]);
         else if (strcmp(argv[i], "--llm-model") == 0 && i + 1 < argc)
-            strncpy(g_llm_model, argv[++i], sizeof(g_llm_model) - 1);
+            snprintf(g_llm_model, sizeof(g_llm_model), "%s", argv[++i]);
         else if (strcmp(argv[i], "--llm-provider") == 0 && i + 1 < argc)
-            strncpy(g_llm_provider, argv[++i], sizeof(g_llm_provider) - 1);
+            snprintf(g_llm_provider, sizeof(g_llm_provider), "%s", argv[++i]);
         else if (strcmp(argv[i], "--code-host") == 0 && i + 1 < argc)
-            strncpy(g_code_host, argv[++i], sizeof(g_code_host) - 1);
+            snprintf(g_code_host, sizeof(g_code_host), "%s", argv[++i]);
         else if (strcmp(argv[i], "--code-port") == 0 && i + 1 < argc)
             g_code_port = (uint16_t)atoi(argv[++i]);
         else if (strcmp(argv[i], "--code-path") == 0 && i + 1 < argc)
-            strncpy(g_code_path, argv[++i], sizeof(g_code_path) - 1);
+            snprintf(g_code_path, sizeof(g_code_path), "%s", argv[++i]);
         else if (strcmp(argv[i], "--code-model") == 0 && i + 1 < argc)
-            strncpy(g_code_model, argv[++i], sizeof(g_code_model) - 1);
+            snprintf(g_code_model, sizeof(g_code_model), "%s", argv[++i]);
         else if (strcmp(argv[i], "--log-file") == 0 && i + 1 < argc)
-            strncpy(g_log_file, argv[++i], sizeof(g_log_file) - 1);
+            snprintf(g_log_file, sizeof(g_log_file), "%s", argv[++i]);
         else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]); return 0;
         }

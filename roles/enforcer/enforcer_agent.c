@@ -164,7 +164,7 @@ static ThreatEntry *threat_get_or_create(const char *name)
     if (g_threats.count >= MAX_THREAT_ENTRIES) return NULL;
     e = &g_threats.entries[g_threats.count++];
     memset(e, 0, sizeof(*e));
-    strncpy(e->name, name, sizeof(e->name) - 1);
+    snprintf(e->name, sizeof(e->name), "%s", name);
     e->active = 1;
     return e;
 }
@@ -175,10 +175,8 @@ static void threat_add_evidence(ThreatEntry *e, const char *ev_type,
     if (!e) return;
     int idx = e->evidence_n < MAX_EVIDENCE ? e->evidence_n
                                            : (e->evidence_n % MAX_EVIDENCE);
-    strncpy(e->evidence[idx].ev_type, ev_type, sizeof(e->evidence[idx].ev_type) - 1);
-    e->evidence[idx].ev_type[sizeof(e->evidence[idx].ev_type) - 1] = '\0';
-    strncpy(e->evidence[idx].detail,  detail,  sizeof(e->evidence[idx].detail) - 1);
-    e->evidence[idx].detail[sizeof(e->evidence[idx].detail) - 1] = '\0';
+    snprintf(e->evidence[idx].ev_type, sizeof(e->evidence[idx].ev_type), "%s", ev_type);
+    snprintf(e->evidence[idx].detail, sizeof(e->evidence[idx].detail), "%s", detail);
     e->evidence[idx].ts = time(NULL);
     if (e->evidence_n < MAX_EVIDENCE) e->evidence_n++;
 }
@@ -312,7 +310,7 @@ static void do_quarantine(const char *agent_name, const char *reason,
 
     e->quarantined        = 1;
     e->quarantine_expires = duration_sec ? time(NULL) + duration_sec : 0;
-    strncpy(e->quarantine_reason, reason, sizeof(e->quarantine_reason) - 1);
+    snprintf(e->quarantine_reason, sizeof(e->quarantine_reason), "%s", reason);
 
     peer_quarantine(&g_peers, agent_name, reason);
 
@@ -500,7 +498,7 @@ static void handle_enforce_msg(const char *payload, const char *from_name)
     p += nlen;
     if (*p == '|') {
         p++;
-        strncpy(reason, p, sizeof(reason) - 1);
+        snprintf(reason, sizeof(reason), "%s", p);
     }
 
     /* Ignore self-referential messages */
@@ -792,9 +790,7 @@ static void handle_http(compat_socket_t cfd)
             compat_close_socket(cfd); return;
         }
         e->blacklisted = 1;
-        strncpy(e->blacklist_reason,
-                reason[0] ? reason : "blacklist",
-                sizeof(e->blacklist_reason) - 1);
+        snprintf(e->blacklist_reason, sizeof(e->blacklist_reason), "%s", reason[0] ? reason : "blacklist");
         /* Permanent quarantine + gossip. */
         do_quarantine(agent, reason[0] ? reason : "blacklist", 0);
         broadcast_enforce("B", agent, reason[0] ? reason : "blacklist");
@@ -835,7 +831,7 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "--approve") == 0 && i + 1 < argc) {
             approve_target = argv[++i];
         } else if (strcmp(argv[i], "--broker") == 0 && i + 1 < argc) {
-            strncpy(broker_host, argv[++i], sizeof(broker_host) - 1);
+            snprintf(broker_host, sizeof(broker_host), "%s", argv[++i]);
             g_use_mqtt = 1;
         } else if (strcmp(argv[i], "--broker-port") == 0 && i + 1 < argc) {
             broker_port = (uint16_t)atoi(argv[++i]);

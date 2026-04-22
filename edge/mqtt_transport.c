@@ -112,7 +112,7 @@ int mqtt_transport_init(MQTTTransport *t,
                         const char *identity_payload)
 {
     memset(t, 0, sizeof(*t));
-    strncpy(t->agent_name, agent_name, sizeof(t->agent_name) - 1);
+    snprintf(t->agent_name, sizeof(t->agent_name), "%s", agent_name);
 
     /* Connect TCP to broker */
     t->sockfd = tcp_connect(broker_host, broker_port);

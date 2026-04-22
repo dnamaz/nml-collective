@@ -6,14 +6,13 @@ CC      ?= gcc
 CFLAGS  := -std=c99 -O2 -Wall -Wextra -I$(EDGE) -I$(EDGE)/mqtt
 TARGET  := enforcer_agent$(PLATFORM_EXT)
 
-# ui.html.h is generated from ui.html via `xxd -i` so the landing page can be
-# embedded in the binary with zero per-deploy config. The generated symbols
-# are `ui_html[]` and `ui_html_len`.
+# ui.html.h embeds the landing page so the binary ships with zero per-deploy
+# config. Generated symbols are `ui_html[]` and `ui_html_len`.
 $(TARGET): enforcer_agent.c ui.html.h $(LIB)
 	$(CC) $(CFLAGS) -o $@ $< $(LIB) -lm $(PLATFORM_LIBS)
 
 ui.html.h: ui.html
-	xxd -i ui.html > ui.html.h
+	$(EMBED_CMD) ui.html ui.html.h
 
 $(LIB):
 	$(MAKE) -C $(EDGE) libcollective.a

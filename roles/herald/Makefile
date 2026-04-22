@@ -16,7 +16,7 @@ $(HTTP_UTIL): ../../edge/http_util.c ../../edge/http_util.h
 	$(MAKE) -C ../../edge http_util.o
 
 ui.html.h: ui.html
-	xxd -i ui.html > ui.html.h
+	$(EMBED_CMD) ui.html ui.html.h
 
 clean:
 	rm -f $(TARGET) ui.html.h

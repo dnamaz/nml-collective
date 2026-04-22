@@ -342,8 +342,8 @@ static void handle_data_get(compat_socket_t fd, const char *query)
         if (strcmp(g_data_names[i].name, name) == 0) {
             char body[256];
             snprintf(body, sizeof(body),
-                     "{\"hash\":\"%s\",\"name\":\"%s\","
-                     "\"object_url\":\"/objects/%s\"}",
+                     "{\"hash\":\"%.16s\",\"name\":\"%.63s\","
+                     "\"object_url\":\"/objects/%.16s\"}",
                      g_data_names[i].hash,
                      g_data_names[i].name,
                      g_data_names[i].hash);
@@ -946,7 +946,7 @@ int main(int argc, char *argv[])
     if (g_key_hex[0]) {
         /* print first 24 chars of key */
         char key_preview[25] = {0};
-        strncpy(key_preview, g_key_hex, 24);
+        snprintf(key_preview, sizeof(key_preview), "%.24s", g_key_hex);
         printf("[%s]   key: %s...\n", g_agent_name, key_preview);
     } else {
         printf("[%s]   key: none — programs will be unsigned\n", g_agent_name);
